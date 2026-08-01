@@ -1,6 +1,4 @@
-name: Install sdpa-*-omp
-description: Build, verify and install the sdpa-dd-omp / sdpa-gmp-omp / sdpa-qd-omp SDP solvers from source on Linux or macOS.
-default_prompt: |
-  Install this sdpa-*-omp solver: run scripts/install.sh from the repository root, then
-  report the verified objective and how to run the solver with proper thread pinning. If
-  the script fails, consult the troubleshooting table in SKILL.md before improvising.
+interface:
+  display_name: "Install SDPA OpenMP"
+  short_description: "Build and verify the sdpa-*-omp SDP solvers"
+  default_prompt: "Use $install-sdpa-omp to build, verify, and optionally install this solver, then report the verified objective and how to run it with proper thread pinning."

@@ -15,22 +15,37 @@ QD_SHA=a47b6c73f86e6421e86a883568dd08e299b20e36c11a99bdfbe50e01bde60e38
 CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/sdpa-omp
 
 usage() {
-    sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'
+    cat <<'EOF'
+Build, verify and optionally install an sdpa-*-omp solver from the current checkout.
+
+Usage:  install.sh [dd|gmp|qd] [--prefix DIR] [--serial] [-h|--help]
+
+  dd|gmp|qd     which solver this checkout is (auto-detected; a mismatch is refused)
+  --prefix DIR  after verification, install the binary into DIR/bin
+  --serial      build without OpenMP (and verify none is linked)
+
+Success ends with DONE; any failure ends with FATAL naming the log to read.
+EOF
     exit "${1:-0}"
 }
-LOG=$(mktemp -d "${TMPDIR:-/tmp}/sdpa-omp-install.XXXXXX")
-die() { echo "FATAL: $*" >&2; echo "       logs: $LOG" >&2; exit 1; }
 note() { echo "==> $*"; }
 
 SOLVER="" PREFIX="" OPENMP=yes
 while [ $# -gt 0 ]; do case "$1" in
   dd|gmp|qd) SOLVER=$1 ;;
-  --prefix) [ $# -ge 2 ] && [ -n "$2" ] || { echo "--prefix needs a directory" >&2; usage 2; }
+  --prefix) { [ $# -ge 2 ] && [ -n "$2" ] && [ "${2#-}" = "$2" ]; } \
+            || { echo "--prefix needs a directory argument" >&2; usage 2; }
             PREFIX=$2; shift ;;
+  --prefix=*) PREFIX=${1#--prefix=}
+            [ -n "$PREFIX" ] || { echo "--prefix needs a directory argument" >&2; usage 2; } ;;
   --serial) OPENMP=no ;;
   -h|--help) usage 0 ;;
   *) echo "unknown argument: $1" >&2; usage 2 ;;
 esac; shift; done
+
+# No temporary state before we know work is actually requested.
+LOG=$(mktemp -d "${TMPDIR:-/tmp}/sdpa-omp-install.XXXXXX")
+die() { echo "FATAL: $*" >&2; echo "       logs: $LOG" >&2; exit 1; }
 
 # ---- detect the checkout, and refuse a solver/repository mismatch ----------
 [ -f configure.ac ] || [ -f configure.in ] || die "run from the root of an sdpa-*-omp checkout"
@@ -67,6 +82,7 @@ else
 fi
 if [ "$SOLVER" != qd ]; then need autoreconf "autoconf automake libtool"; fi
 if [ "$SOLVER" = qd ]; then need curl "curl"; need tar "tar"; fi
+if [ -n "$PREFIX" ]; then need install "coreutils"; fi
 note "compiler: $GXX   jobs: $NPROC"
 
 # ---- flags: explicit, auditable ---------------------------------------------
@@ -94,18 +110,27 @@ qd)
         if [ "$OS" != Darwin ] && [ -f /usr/include/qd/qd_real.h ]; then
             QD_DIR=/usr
         else
-            QD_DIR=$CACHE/qd-$QD_VER
-            if [ ! -f "$QD_DIR/lib/libqd.a" ]; then
+            # Namespace the cache by ABI: an old library built by a different
+            # compiler or architecture must never be silently reused.
+            QD_DIR=$CACHE/qd-$QD_VER-$(uname -m)-gcc$("$GXX" -dumpversion | cut -d. -f1)
+            # .complete is written only after make install succeeds -- a bare
+            # libqd.a left by an interrupted install does not count.
+            if [ ! -f "$QD_DIR/.complete" ]; then
+                command -v sha256sum >/dev/null || command -v shasum >/dev/null \
+                    || die "need sha256sum or shasum to verify the QD download"
                 note "building QD $QD_VER from source with $GXX (cached at $QD_DIR)"
+                rm -rf "$QD_DIR"
                 BUILD=$(mktemp -d "${TMPDIR:-/tmp}/qd-build.XXXXXX")
                 curl -fsSLo "$BUILD/qd.tar.gz" "$QD_URL" \
-                    || die "cannot download QD; set QD_DIR to an existing GCC-built QD"
+                    || { rm -rf "$BUILD"; die "cannot download QD; set QD_DIR to an existing GCC-built QD"; }
                 GOT=$( { sha256sum "$BUILD/qd.tar.gz" 2>/dev/null || shasum -a 256 "$BUILD/qd.tar.gz"; } | awk '{print $1}')
-                [ "$GOT" = "$QD_SHA" ] || die "QD tarball sha256 mismatch: got $GOT"
-                tar xzf "$BUILD/qd.tar.gz" -C "$BUILD"
+                [ "$GOT" = "$QD_SHA" ] || { rm -rf "$BUILD"; die "QD tarball sha256 mismatch: got $GOT, expected $QD_SHA"; }
+                tar xzf "$BUILD/qd.tar.gz" -C "$BUILD" \
+                    || { rm -rf "$BUILD"; die "cannot extract the verified QD tarball"; }
                 if ( cd "$BUILD/qd-$QD_VER" && ./configure CC="$GCC" CXX="$GXX" \
                         --prefix="$QD_DIR" --enable-fortran=no && make -j"$NPROC" && make install
                    ) >"$LOG/qd-build.log" 2>&1; then
+                    touch "$QD_DIR/.complete"
                     rm -rf "$BUILD"
                 else
                     rm -rf "$QD_DIR"   # never leave a half-installed cache to be reused
@@ -146,6 +171,10 @@ else
 fi
 
 # ---- build --------------------------------------------------------------------
+# Objects from an earlier run must not survive into this one: make does not rebuild
+# on a compiler/flag/OpenMP-mode change, and mixed objects fail to link (or worse).
+note "make clean (a mode or compiler switch must not reuse old objects)"
+make clean >"$LOG/clean.log" 2>&1 || die "make clean failed; see $LOG/clean.log"
 # A binary from an earlier run must not be able to vouch for this one.
 rm -f "$BIN"
 
@@ -189,9 +218,10 @@ else HAVE_OMP=$(ldd "$BIN" | grep -c gomp || true); fi
 [ "$OPENMP" = yes ] && [ "$HAVE_OMP" -eq 0 ] && die "binary has NO OpenMP runtime -- silent serial build"
 [ "$OPENMP" = no ] && [ "$HAVE_OMP" -gt 0 ] && die "serial requested but OpenMP is linked"
 
-./"$BIN" -ds example1.dat-s -o "$LOG/example.result" -p param.sdpa >/dev/null 2>&1 \
-    || die "solver failed on the bundled example"
-OBJ=$(grep -m1 objValPrimal "$LOG/example.result" | sed 's/.*= *//')
+./"$BIN" -ds example1.dat-s -o "$LOG/example.result" -p param.sdpa >"$LOG/example.log" 2>&1 \
+    || die "solver failed on the bundled example; see $LOG/example.log"
+OBJ=$(grep -m1 objValPrimal "$LOG/example.result" 2>/dev/null | sed 's/.*= *//' || true)
+[ -n "$OBJ" ] || die "no objValPrimal in the example output; see $LOG/example.log and $LOG/example.result"
 case "$OBJ" in -4.19*|-4.1899*) : ;; *) die "example objective $OBJ != expected -4.19e+01" ;; esac
 note "example solved: objValPrimal = $OBJ   (OpenMP runtime markers: $HAVE_OMP)"
 

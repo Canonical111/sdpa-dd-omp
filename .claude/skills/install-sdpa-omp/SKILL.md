@@ -25,9 +25,13 @@ loaded from somewhere else, run the `scripts/install.sh` that sits next to this 
 The script validates its arguments and required tools, auto-detects dd/gmp/qd from
 `configure.ac` (and refuses a solver/repository mismatch), resolves the right compiler, applies
 the SPOOLES rescue when needed, **verifies OpenMP linkage matches what was requested**, and
-solves the bundled example, checking the objective (≈ −4.19e+01). Logs go to a temporary
-directory (named in every FATAL message), the checkout stays clean, QD sources are
-sha256-verified and cached under `~/.cache/sdpa-omp/`, and `DONE` is printed only after
+solves the bundled example, checking the objective (≈ −4.19e+01). It starts every build
+from `make clean`, so switching between OpenMP and `--serial` (or changing compilers) in
+the same checkout is safe. Logs go to a temporary directory (named in every FATAL
+message); installer logs, the downloaded QD source and the QD build cache all stay outside
+the solver checkout (QD is sha256-verified, cached under `~/.cache/sdpa-omp/` keyed by
+architecture and GCC version), though autotools may refresh the tracked files listed under
+"Facts" below. `DONE` is printed only after
 every requested operation — including `--prefix` installation — has succeeded. Treat its
 FATAL messages as authoritative — each names the trap it corresponds to.
 
