@@ -43,7 +43,16 @@ companion repository (benchmarks, harness, and the patch generators).
 ## Building
 
 ```bash
-./configure --enable-openmp=yes && make -j$(nproc)   # fails inside SPOOLES — known upstream issue
+autoreconf -fi                       # upstream ships configure.ac only, no configure
+./configure --enable-openmp=yes
+make -j$(nproc)
+```
+
+Verified on a fresh Ubuntu 24.04 clone (gcc 13) and by CI on every push. **If** `make` stops
+inside SPOOLES with a `struct timezone` error (seen with some toolchains — upstream's
+`.POSIX:` Make.inc selects `c99` as the compiler):
+
+```bash
 sed -i 's|^# CC = gcc|  CC = gcc|' external/spooles/work/internal/Make.inc
 ( cd external/spooles/work/internal && find . -name '*.o' -delete && rm -f spooles.a \
   && make global -f makefile && cp spooles.a ../../../i/SPOOLES/lib/libspooles.a )
