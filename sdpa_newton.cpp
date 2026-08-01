@@ -19,8 +19,48 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 ------------------------------------------------------------- */
 
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-07-31: Schur-complement (bMat) construction threaded. See git log. */
 #include <sdpa_newton.h>
 #include <sdpa_parts.h>
+#include <vector>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+
+// ---------------------------------------------------------------------------
+// Thresholds for threading the Schur-complement (bMat) construction. Override with -D.
+// The k1 x k2 loop costs roughly nConstraint^2 * blockDim; below this there is not
+// enough work to amortise an OpenMP fork/join.
+// ---------------------------------------------------------------------------
+#ifndef SDPA_OMP_MIN_CONSTRAINTS
+#define SDPA_OMP_MIN_CONSTRAINTS 8
+#endif
+#ifndef SDPA_OMP_MIN_BMAT_WORK
+#define SDPA_OMP_MIN_BMAT_WORK 20000.0
+#endif
+// Hard ceiling on the extra memory used to privatise work1/work2 across threads.
+// Cost is 2 * blockDim^2 * bytes-per-element per extra thread; on a large block that would
+// otherwise grow without bound. If the full thread count would exceed this, the thread
+// count for the block is reduced rather than the memory.
+#ifndef SDPA_OMP_MAX_PRIV_MB
+#define SDPA_OMP_MAX_PRIV_MB 256.0
+#endif
+// Bytes actually occupied by one scalar. For dd_real/qd_real the mantissa is stored inline,
+// so sizeof() is exact. For mpf_class it is NOT: the object is a 24-byte descriptor whose
+// limbs are allocated separately, so sizeof() undercounts by ~3x at 256-bit precision and
+// the memory cap above would admit several times its nominal budget.
+static inline double sdpa_omp_bytes_per_elem() {
+    return (double)sizeof(dd_real);
+}
+// Choosing the parallel axis. For an F1/F2-dominated block the per-constraint setup is a
+// blockDim^3 dense gemm, which Rgemm already threads well on its own; threading k1 instead
+// makes each of those gemms serial and gains nothing. Below this gemm size Rgemm cannot
+// parallelise effectively (blocks of 25-80 in the control* family) and threading k1 wins
+// several-fold. Measured crossover on an i9-13900K lies between 80^3 and 100^3.
+#ifndef SDPA_OMP_RGEMM_OWNS_BLOCK
+#define SDPA_OMP_RGEMM_OWNS_BLOCK 700000.0
+#endif
 
 namespace sdpa {
 
@@ -983,87 +1023,258 @@ void Newton::compute_bMat_dense_SDP(InputData &inputData, Solutions &currentPt, 
     for (int l = 0; l < SDP_nBlock; ++l) {
         DenseMatrix &xMat = currentPt.xMat.SDP_block[l];
         DenseMatrix &invzMat = currentPt.invzMat.SDP_block[l];
-        DenseMatrix &work1 = work.DLS1.SDP_block[l];
-        DenseMatrix &work2 = work.DLS2.SDP_block[l];
+        DenseMatrix &work1_master = work.DLS1.SDP_block[l];
+        DenseMatrix &work2_master = work.DLS2.SDP_block[l];
+        const int nConstraint = inputData.SDP_nConstraint[l];
 
-        for (int k1 = 0; k1 < inputData.SDP_nConstraint[l]; k1++) {
-            int i = inputData.SDP_constraint[l][k1];
-            int ib = inputData.SDP_blockIndex[l][k1];
-            int inz = inputData.A[i].SDP_sp_block[ib].NonZeroEffect;
-            SparseMatrix &Ai = inputData.A[i].SDP_sp_block[ib];
-
-            FormulaType formula = useFormula[i * SDP_nBlock + l];
-            // ---------------------------------------------------
-            // formula = F3; // this is force change
-            // ---------------------------------------------------
-            TimeStart(B_NDIAG_START1);
-            TimeStart(B_NDIAG_START2);
-
-            bool hasF2Gcal = false;
-            if (formula == F1) {
-                Lal::let(work1, '=', Ai, '*', invzMat);
-                Lal::let(work2, '=', xMat, '*', work1);
-            } else if (formula == F2) {
-                Lal::let(work1, '=', Ai, '*', invzMat);
-                hasF2Gcal = false;
-                // Lal::let(gMat.ele[l],'=',xMat.ele[l],'*',fMat.ele[l]);
-            }
-            TimeEnd(B_NDIAG_END2);
-            com.B_PRE += TimeCal(B_NDIAG_START2, B_NDIAG_END2);
-
-            for (int k2 = 0; k2 < inputData.SDP_nConstraint[l]; k2++) {
-                int j = inputData.SDP_constraint[l][k2];
-                int jb = inputData.SDP_blockIndex[l][k2];
-                int jnz = inputData.A[j].SDP_sp_block[jb].NonZeroEffect;
-                SparseMatrix &Aj = inputData.A[j].SDP_sp_block[jb];
-
-                // Select the formula A[i] or the formula A[j].
-                // Use formula that has more NonZeroEffects than others.
-                // We must calculate i==j.
-
-                if ((inz < jnz) || ((inz == jnz) && (i < j))) {
-                    continue;
+        // ------------------------------------------------------------------
+        // Decide whether to run the k1 loop in parallel.
+        //
+        // Threading is only safe if k1 -> i is injective within this block, because the
+        // proof that bMat writes are disjoint relies on each constraint index having a
+        // single owner. SDP_constraint[l] is built by appending i once per sub-block of
+        // A_i that lands in block l, so a repeat is possible in principle. Check it
+        // rather than assume it, and fall back to serial if it does not hold.
+        //
+        // Also require enough work to be worth a fork/join, in the spirit of SDPB's
+        // minimal_split_factor.
+        // ------------------------------------------------------------------
+        bool injective = true;
+#ifdef _OPENMP
+        {
+            std::vector<char> seen(m, 0);
+            for (int k = 0; k < nConstraint; ++k) {
+                const int ii = inputData.SDP_constraint[l][k];
+                if (ii < 0 || ii >= m || seen[ii]) {
+                    injective = false;
+                    break;
                 }
+                seen[ii] = 1;
+            }
+        }
+        bool anyF12 = false;
+        for (int k = 0; k < nConstraint; ++k) {
+            const FormulaType f = useFormula[inputData.SDP_constraint[l][k] * SDP_nBlock + l];
+            if (f == F1 || f == F2) {
+                anyF12 = true;
+                break;
+            }
+        }
+        // If the block has any F1/F2 constraint AND its setup gemm is big enough for
+        // Rgemm to thread well, leave k1 serial and let Rgemm own the parallelism.
+        // Threading k1 there makes each blockDim^3 gemm serial inside a thread and gains
+        // nothing -- measured 1.35x SLOWER than upstream on gpp124-1 (blockDim 124).
+        // The test is on PRESENCE, not count: a single F1 constraint can dominate the
+        // block's cost, so a count-based majority test misses it (gpp124-1 has few F1
+        // constraints but they carry ~97% of the bMat time). Blocks with no F1/F2 at all
+        // (arch0, truss5) have no setup gemm and keep their large k1-threading win.
+        const double setup_gemm =
+            (double)xMat.nRow * (double)xMat.nRow * (double)xMat.nRow;
+        // Let Rgemm own the block, rather than threading k1, under two conditions:
+        //   (a) a single setup gemm is big enough for Rgemm to thread well at all, and
+        //   (b) there is NOT abundant k1 work relative to the block dimension.
+        //
+        // (b) is an EMPIRICALLY CALIBRATED PROXY, not a cost model. It compares constraint
+        // count against block dimension (nConstraint >= 2*blockDim) and nothing else -- it
+        // does not total the setup gemms and weigh them against the k1 x k2 pair work,
+        // which is what a real cost comparison would do. It is kept because it is the only
+        // rule of four tried that got both ends right, not because it is derived:
+        //   theta3    1106 constraints over a 150 block (7.4x) -- wants k1 threading
+        //   gpp124-1   125 constraints over a 124 block (1.0x) -- wants Rgemm
+        // Measured over 4 runs each, both effects consistent and outside run-to-run noise:
+        //   gpp124-1  upstream ~0.542  k1-threaded ~0.706  Rgemm-owned ~0.448
+        //   theta3    upstream ~12.6   k1-threaded ~12.2   Rgemm-owned ~13.9
+        // Without (b) theta3 would be handed to Rgemm and lose the k1 parallelism it has in
+        // abundance (1.18x slower than upstream); without (a) the control* family
+        // (blockDim 25-80) would be handed blocks Rgemm cannot thread, forfeiting ~3x.
+        // Do not re-derive this from a constraint-type count without new benchmarks.
+        const bool enough_k1_work =
+            (double)nConstraint >= 2.0 * (double)xMat.nRow;
+        const bool rgemm_owns_block = anyF12 && (setup_gemm >= SDPA_OMP_RGEMM_OWNS_BLOCK) &&
+                                      !enough_k1_work;
+        const bool par = injective && !rgemm_owns_block && nConstraint >= SDPA_OMP_MIN_CONSTRAINTS &&
+                         (double)nConstraint * (double)nConstraint * (double)xMat.nRow >= SDPA_OMP_MIN_BMAT_WORK;
 
-                dd_real value;
+        // Cap the team by the work actually available. There are exactly nConstraint k1
+        // tasks, so a larger team only pays fork/join cost and privatises scratch for
+        // workers that will never be handed a task. This is reachable in practice: the
+        // work threshold admits blocks with as few as SDPA_OMP_MIN_CONSTRAINTS (8)
+        // constraints, which on a 24-core machine would otherwise start 24 threads.
+        int max_threads = omp_get_max_threads();
+        if (max_threads > nConstraint)
+            max_threads = nConstraint < 1 ? 1 : nConstraint;
+
+        // Then cap so privatising work1/work2 cannot exceed the memory budget.
+        // Only relevant when the block actually has F1/F2 constraints; F3 needs no scratch.
+        if (anyF12 && max_threads > 1) {
+            const double per_thread_mb =
+                2.0 * (double)work1_master.nRow * (double)work1_master.nCol *
+                sdpa_omp_bytes_per_elem() / 1048576.0;
+            if (per_thread_mb > 0.0) {
+                const int allowed = 1 + (int)(SDPA_OMP_MAX_PRIV_MB / per_thread_mb);
+                if (allowed < max_threads)
+                    max_threads = allowed < 1 ? 1 : allowed;
+            }
+        }
+#else
+        const bool par = false;
+        const bool anyF12 = true;
+        (void)injective;
+#endif
+
+        double acc_pre = 0.0, acc_f1 = 0.0, acc_f2 = 0.0, acc_f3 = 0.0;
+
+        // The body is a lambda so that the SERIAL path can run without entering any
+        // OpenMP construct at all. This matters: "#pragma omp parallel if(false)" still
+        // creates a parallel region (a team of one), which makes every inner Rgemm call
+        // *nested* -- and nested parallelism is off by default, so Rgemm's own threading
+        // would be silently disabled. On gpp124-1 that cost 7.7x in bMat (0.035s -> 0.269s)
+        // versus upstream, because the k1 loop did not engage while Rgemm's threading was
+        // lost anyway.
+        auto run_k1 = [&](int k1, DenseMatrix *w1, DenseMatrix *w2,
+                          double &a_pre, double &a_f1, double &a_f2, double &a_f3,
+                          bool may_need_priv, bool &owns_priv,
+                          DenseMatrix &priv1, DenseMatrix &priv2) {
+            // Per-thread scratch. Thread 0 (and the serial case) reuses the existing
+            // per-block work matrices, so only the extra threads allocate.
+                int i = inputData.SDP_constraint[l][k1];
+                int ib = inputData.SDP_blockIndex[l][k1];
+                int inz = inputData.A[i].SDP_sp_block[ib].NonZeroEffect;
+                SparseMatrix &Ai = inputData.A[i].SDP_sp_block[ib];
+
+                FormulaType formula = useFormula[i * SDP_nBlock + l];
+
+                // Plain locals, not TimeStart/TimeEnd: those macros declare `static
+                // double`, which would be shared across threads.
+                const double t_start1 = Time::rGetUseTime();
+                const double t_start2 = t_start1;
+
+                if (may_need_priv && !owns_priv && (formula == F1 || formula == F2)) {
+                    priv1.initialize(work1_master.nRow, work1_master.nCol, work1_master.type);
+                    priv2.initialize(work2_master.nRow, work2_master.nCol, work2_master.type);
+                    owns_priv = true;
+                }
+                DenseMatrix &work1 = owns_priv ? priv1 : *w1;
+                DenseMatrix &work2 = owns_priv ? priv2 : *w2;
+
+                bool hasF2Gcal = false;
+                if (formula == F1) {
+                    Lal::let(work1, '=', Ai, '*', invzMat);
+                    Lal::let(work2, '=', xMat, '*', work1);
+                } else if (formula == F2) {
+                    Lal::let(work1, '=', Ai, '*', invzMat);
+                    hasF2Gcal = false;
+                }
+                a_pre += Time::rGetUseTime() - t_start2;
+
+                for (int k2 = 0; k2 < nConstraint; k2++) {
+                    int j = inputData.SDP_constraint[l][k2];
+                    int jb = inputData.SDP_blockIndex[l][k2];
+                    int jnz = inputData.A[j].SDP_sp_block[jb].NonZeroEffect;
+                    SparseMatrix &Aj = inputData.A[j].SDP_sp_block[jb];
+
+                    // Select the formula A[i] or the formula A[j].
+                    // Use formula that has more NonZeroEffects than others.
+                    // We must calculate i==j.
+                    // This test is also what makes the bMat writes below disjoint across
+                    // k1: it gives each unordered pair {i,j} exactly one owner.
+                    if ((inz < jnz) || ((inz == jnz) && (i < j))) {
+                        continue;
+                    }
+
+                    dd_real value;
+                    switch (formula) {
+                    case F1:
+                        calF1(value, work2, Aj);
+                        break;
+                    case F2:
+                        calF2(value, work1, work2, xMat, Aj, hasF2Gcal);
+                        break;
+                    case F3:
+                        calF3(value, work1, work2, xMat, invzMat, Ai, Aj);
+                        break;
+                    } // end of switch
+                    if (i != j) {
+                        bMat.de_ele[i + m * j] += value;
+                        bMat.de_ele[j + m * i] += value;
+                    } else {
+                        bMat.de_ele[i + m * i] += value;
+                    }
+                } // end of 'for (int j)'
+
+                const double t = Time::rGetUseTime() - t_start1;
                 switch (formula) {
                 case F1:
-                    // rMessage("calF1");
-                    calF1(value, work2, Aj);
+                    a_f1 += t;
                     break;
                 case F2:
-                    // rMessage("calF2 ");
-                    calF2(value, work1, work2, xMat, Aj, hasF2Gcal);
-                    // calF1(value2,gMat.ele[l],A[j].ele[l]);
-                    // rMessage("calF2:  " << (value-value2));
+                    a_f2 += t;
                     break;
                 case F3:
-                    // rMessage("calF3");
-                    calF3(value, work1, work2, xMat, invzMat, Ai, Aj);
+                    a_f3 += t;
                     break;
-                } // end of switch
-                if (i != j) {
-                    bMat.de_ele[i + m * j] += value;
-                    bMat.de_ele[j + m * i] += value;
-                } else {
-                    bMat.de_ele[i + m * i] += value;
                 }
-            } // end of 'for (int j)'
+        }; // end of run_k1 lambda
 
-            TimeEnd(B_NDIAG_END1);
-            double t = TimeCal(B_NDIAG_START1, B_NDIAG_END1);
-            switch (formula) {
-            case F1:
-                com.B_F1 += t;
-                break;
-            case F2:
-                com.B_F2 += t;
-                break;
-            case F3:
-                com.B_F3 += t;
-                break;
+        // Decide AFTER every cap, not before. `par` is computed from the work thresholds,
+        // but max_threads is then reduced by the constraint count and the scratch-memory
+        // budget, and either can bring it to 1. Entering `omp parallel num_threads(1)`
+        // creates a team of one, which is exactly the case the serial path below exists to
+        // avoid: it makes any inner Rgemm call nested, and nested parallelism is off by
+        // default, so Rgemm's own threading is silently lost. That is most likely to bite
+        // large GMP blocks, where the memory cap does reduce the team.
+        // !omp_in_parallel() additionally keeps this correct if the routine is ever reached
+        // from an enclosing parallel region.
+        // The WHOLE decision is inside the guard: max_threads exists only when _OPENMP is
+        // defined, so referencing it outside fails to compile in a serial build.
+#ifdef _OPENMP
+        const bool use_parallel = par && max_threads > 1 && !omp_in_parallel();
+#else
+        const bool use_parallel = false;
+#endif
+
+        if (use_parallel) {
+#ifdef _OPENMP
+#pragma omp parallel num_threads(max_threads) reduction(+ : acc_pre, acc_f1, acc_f2, acc_f3)
+#endif
+            {
+                // Scratch is only needed by threads other than 0, and only for F1/F2, so
+                // allocate LAZILY on the first F1/F2 constraint a thread actually reaches.
+                // A block may hold a handful of F1 constraints whose cost rounds to zero;
+                // allocating eagerly for every thread then wastes 2*blockDim^2*32 bytes
+                // each. On theta3 (blockDim 150, 24 threads) that was +15 MB for nothing.
+                DenseMatrix *w1 = &work1_master;
+                DenseMatrix *w2 = &work2_master;
+                DenseMatrix priv1, priv2;
+                bool owns_priv = false;
+                bool may_need_priv = false;
+#ifdef _OPENMP
+                may_need_priv = (omp_get_num_threads() > 1 && omp_get_thread_num() > 0);
+#endif
+#ifdef _OPENMP
+#pragma omp for schedule(dynamic, 1)
+#endif
+                for (int k1 = 0; k1 < nConstraint; k1++)
+                    run_k1(k1, w1, w2, acc_pre, acc_f1, acc_f2, acc_f3,
+                           may_need_priv, owns_priv, priv1, priv2);
+                if (owns_priv) {
+                    priv1.terminate();
+                    priv2.terminate();
+                }
             }
-        } // end of 'for (int i)'
+        } else {
+            // No OpenMP construct at all here, so inner Rgemm/Rdot keep their own threading.
+            DenseMatrix priv1, priv2;
+            bool owns_priv = false;
+            for (int k1 = 0; k1 < nConstraint; k1++)
+                run_k1(k1, &work1_master, &work2_master, acc_pre, acc_f1, acc_f2, acc_f3,
+                       false, owns_priv, priv1, priv2);
+        }
+
+        com.B_PRE += acc_pre;
+        com.B_F1 += acc_f1;
+        com.B_F2 += acc_f2;
+        com.B_F3 += acc_f3;
     }     // end of 'for (int l)'
 }
 
