@@ -233,17 +233,122 @@ Iteration counts differ on 12 problem(s) (control1, control2, theta1, mcp100, mc
 | control8 | 21.8 | 22.0 | 24.6 | 22.0 | 24.4 |
 
 
+## thanos — AMD EPYC 7232P (8 physical cores), Ubuntu
+
+The `fork*` binary here is the one produced by the README build instructions, from a fresh
+clone of the published repository — this table validates the installation guide's output,
+not a hand-configured tree.
+
+## thanos-epyc7232p — dd — `wall_s`
+
+Median of 3 repeats, seconds (`wall_s`). Spread = (max-min)/median.
+
+| problem | m | v712 | upstream1 | upstream8 | fork1 | fork8 |
+|---|---|---|---|---|---|---|
+| control1 | 21 | 0.110 ±9% | 0.120 | 0.180 ±39% | 0.100 ±10% | 0.110 |
+| gpp100 | 101 | 2.620 ±13% | 3.190 | 1.220 ±25% | 2.860 | 1.240 ±2% |
+| control2 | 66 | 0.650 | 0.740 | 0.540 ±4% | 0.690 | 0.300 |
+| gpp124-1 | 125 | 5.060 | 6.130 | 1.760 ±31% | 5.470 | 2.260 ±1% |
+| theta1 | 104 | 0.510 | 0.840 | 0.590 ±8% | 0.640 | 0.450 |
+| mcp100 | 100 | 2.810 | 4.880 | 1.880 ±27% | 3.010 | 1.700 |
+| mcp124-1 | 124 | 4.410 | 8.170 | 3.850 ±33% | 4.260 | 2.420 |
+| truss5 | 208 | 3.110 | 2.880 | 3.520 ±15% | 2.820 | 1.760 ±7% |
+| arch0 | 174 | 36.560 | 50.410 | 30.770 ±1% | 38.070 | 10.690 ±3% |
+| arch2 | 174 | 42.500 | 56.040 | 36.180 | 43.950 | 11.310 ±4% |
+| arch4 | 174 | 42.450 | 56.780 | 36.720 ±2% | 44.510 | 11.370 ±5% |
+| arch8 | 174 | 39.510 | 52.070 | 33.560 | 40.830 | 10.530 ±5% |
+| control5 | 351 | 39.770 | 43.670 | 17.990 ±2% | 41.840 | 8.470 ±7% |
+| control6 | 496 | 95.180 | 105.820 | 39.530 ±1% | 101.650 | 19.080 ±3% |
+| theta2 | 498 | 14.990 | 19.440 | 11.000 ±49% | 17.480 | 8.390 ±2% |
+| qap8 | 529 | 6.930 | 7.140 | 4.030 ±2% | 7.020 | 3.110 ±7% |
+| control7 | 666 | 208.020 | 230.790 | 83.440 | 222.140 | 40.160 ±1% |
+| qap9 | 748 | 19.760 | 18.540 | 9.290 ±14% | 18.240 | 7.560 ±2% |
+| theta3 | 1106 | 131.040 | 201.840 | 66.660 ±11% | 190.910 | 73.730 |
+| control8 | 861 | 411.300 | 455.220 | 155.070 ±2% | 439.560 | 77.330 |
+| **total** | | **1107.3** | **1324.7** | **537.8** | **1226.0** | **292.0** |
+
+**fork8 vs v712: 3.79x**  (totals 1107.3 s -> 292.0 s)
+
+Iteration counts differ on 11 problem(s) (control1, theta1, mcp100, mcp124-1, truss5, arch4, control5, theta2, qap8, qap9, theta3), so the wall-time ratio above mixes speed with path length. **Per iteration: 3.82x** (19.475 s -> 5.096 s).
+
+### Integrity
+
+- arch0/upstream8: iteration count VARIES across repeats (72/73)
+- arch4/upstream8: iteration count VARIES across repeats (72/73)
+- control1/upstream8: iteration count VARIES across repeats (109/69/82)
+- control2/upstream8: iteration count VARIES across repeats (60/62)
+- control5/upstream8: iteration count VARIES across repeats (59/60)
+- control8/upstream8: iteration count VARIES across repeats (60/61)
+- gpp100/upstream8: objective VARIES across repeats
+- gpp124-1/upstream8: objective VARIES across repeats
+- mcp100/upstream8: iteration count VARIES across repeats (52/54/58)
+- mcp124-1/upstream8: iteration count VARIES across repeats (53/66/78)
+- qap8/upstream8: iteration count VARIES across repeats (19/20)
+- qap8/upstream8: objective VARIES across repeats
+- qap9/upstream8: iteration count VARIES across repeats (19/21)
+- qap9/upstream8: objective VARIES across repeats
+- theta1/upstream8: iteration count VARIES across repeats (45/47/48)
+- theta2/upstream8: iteration count VARIES across repeats (50/62/82)
+- theta3/upstream8: iteration count VARIES across repeats (52/54/58)
+- truss5/upstream8: iteration count VARIES across repeats (59/62/67)
+- control1: ITERATION COUNT differs BETWEEN configs (71, 77) -- compare per-iteration cost, not wall time
+- gpp100: objective differs BETWEEN configs: -4.4943074465425575e+01, -4.4943074465425582e+01
+- gpp124-1: objective differs BETWEEN configs: -7.3429256740235580e+00, -7.3429256740235607e+00
+- theta1: ITERATION COUNT differs BETWEEN configs (43, 50) -- compare per-iteration cost, not wall time
+- mcp100: ITERATION COUNT differs BETWEEN configs (54, 55) -- compare per-iteration cost, not wall time
+- mcp124-1: ITERATION COUNT differs BETWEEN configs (50, 56) -- compare per-iteration cost, not wall time
+- truss5: ITERATION COUNT differs BETWEEN configs (62, 63) -- compare per-iteration cost, not wall time
+- arch4: ITERATION COUNT differs BETWEEN configs (71, 72) -- compare per-iteration cost, not wall time
+- control5: ITERATION COUNT differs BETWEEN configs (59, 60) -- compare per-iteration cost, not wall time
+- theta2: ITERATION COUNT differs BETWEEN configs (51, 56) -- compare per-iteration cost, not wall time
+- qap8: objective differs BETWEEN configs: -7.5694312988433944e+02, -7.5694487097376361e+02
+- qap8: ITERATION COUNT differs BETWEEN configs (19, 20) -- compare per-iteration cost, not wall time
+- qap9: objective differs BETWEEN configs: -1.4099198052029226e+03, -1.4099353243156127e+03
+- qap9: ITERATION COUNT differs BETWEEN configs (19, 22) -- compare per-iteration cost, not wall time
+- theta3: ITERATION COUNT differs BETWEEN configs (50, 68) -- compare per-iteration cost, not wall time
+
+### Peak RSS (MB, max over repeats)
+
+| problem | v712 | upstream1 | upstream8 | fork1 | fork8 |
+|---|---|---|---|---|---|
+| control1 | 11.7 | 11.6 | 11.7 | 11.8 | 11.8 |
+| gpp100 | 11.8 | 11.8 | 11.7 | 11.7 | 11.7 |
+| control2 | 11.8 | 11.7 | 11.7 | 11.7 | 11.7 |
+| gpp124-1 | 11.7 | 11.7 | 11.8 | 11.7 | 11.8 |
+| theta1 | 11.8 | 11.7 | 11.8 | 11.7 | 11.6 |
+| mcp100 | 11.7 | 11.7 | 11.7 | 11.7 | 11.7 |
+| mcp124-1 | 11.7 | 11.8 | 11.8 | 11.8 | 11.7 |
+| truss5 | 11.8 | 11.8 | 11.7 | 11.8 | 11.7 |
+| arch0 | 11.7 | 11.7 | 11.8 | 11.7 | 11.8 |
+| arch2 | 11.8 | 11.8 | 11.7 | 11.8 | 11.7 |
+| arch4 | 11.8 | 11.8 | 11.8 | 11.8 | 11.8 |
+| arch8 | 11.8 | 11.8 | 11.9 | 11.9 | 11.8 |
+| control5 | 11.8 | 11.7 | 11.8 | 11.7 | 11.8 |
+| control6 | 11.7 | 11.8 | 11.7 | 11.8 | 11.7 |
+| theta2 | 11.8 | 11.8 | 11.9 | 11.8 | 12.0 |
+| qap8 | 11.8 | 11.8 | 11.8 | 11.7 | 11.8 |
+| control7 | 13.2 | 15.4 | 15.1 | 15.6 | 16.4 |
+| qap9 | 13.3 | 15.6 | 15.7 | 15.6 | 16.5 |
+| theta3 | 26.2 | 28.6 | 28.7 | 28.7 | 29.9 |
+| control8 | 19.5 | 21.9 | 21.2 | 21.7 | 22.5 |
+
+
 Two figures against 7.1.2 appear above because mpack (7.1.2) and mplapack (master) round
-differently and take different iteration counts on 12 of 20 problems. Against upstream
-master the iteration counts are identical on 20/20, so that comparison is clean
-like-for-like.
+differently and take different iteration counts on 12 of 20 problems. Against upstream the
+right reading is: **serial** upstream and optimized trajectories match on 20/20 problems,
+but **threaded upstream is nondeterministic** (the integrity sections above flag every
+instance), so the headline vs-upstream ratios are observed end-to-end speedups rather than
+strictly same-trajectory comparisons. The optimized build's own trajectory is identical at
+every thread count.
 
 ## Reproducibility evidence
 
 The optimized build is **thread-count independent**: an FNV-1a checksum over every scalar of
 the final `xMat`/`yVec`/`zMat` (normalised representation; -0.0 folded to +0.0) is identical
 at 1, 2, 4, 8 and 24 threads on all 12 problems tested -- see `bench/statehash_pi.tsv` for
-the full record with source commit and parameter checksum. The instrument was validated
+the full record with source commit and parameter checksum. The record was measured on the
+**published tip** (`6ebb025`) built from a clean clone, and all 60 cells are hash-identical
+to the record taken on the pre-publication series. The instrument was validated
 against a build known to differ, so agreement is informative rather than vacuous.
 
 Unpatched upstream is **not** reproducible when threaded: across the same benchmark the
@@ -253,4 +358,5 @@ configuration, including three problems whose *objective* differs run to run
 
 Raw data: [`bench/pi_dd_v2.tsv`](bench/pi_dd_v2.tsv),
 [`bench/mac_dd_v2.tsv`](bench/mac_dd_v2.tsv),
+[`bench/dd_v2_thanos.tsv`](bench/dd_v2_thanos.tsv),
 [`bench/statehash_pi.tsv`](bench/statehash_pi.tsv).
