@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 ------------------------------------------------------------- */
 
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-07-31: per-formula bMat timers reported as worker-seconds. See git log. */
 #include <sdpa_parts.h>
 
 namespace sdpa {
@@ -85,10 +86,10 @@ void ComputeTime::display(FILE *fpout) {
     fprintf(fpout, " Corrector time  =       %f,  %f\n", Corrector, Corrector / MainLoop * 100.0);
     fprintf(fpout, " Make bMat time  =       %f,  %f\n", makebMat, makebMat / MainLoop * 100.0);
     fprintf(fpout, " Make bDia time  =       %f,  %f\n", B_DIAG, B_DIAG / MainLoop * 100.0);
-    fprintf(fpout, " Make bF1  time  =       %f,  %f\n", B_F1, B_F1 / MainLoop * 100.0);
-    fprintf(fpout, " Make bF2  time  =       %f,  %f\n", B_F2, B_F2 / MainLoop * 100.0);
-    fprintf(fpout, " Make bF3  time  =       %f,  %f\n", B_F3, B_F3 / MainLoop * 100.0);
-    fprintf(fpout, " Make bPRE time  =       %f,  %f\n", B_PRE, B_PRE / MainLoop * 100.0);
+    fprintf(fpout, " Make bF1  wsec  =       %f   (worker-s, summed over threads)\n", B_F1);
+    fprintf(fpout, " Make bF2  wsec  =       %f   (worker-s, summed over threads)\n", B_F2);
+    fprintf(fpout, " Make bF3  wsec  =       %f   (worker-s, summed over threads)\n", B_F3);
+    fprintf(fpout, " Make bPRE wsec  =       %f   (worker-s, summed over threads)\n", B_PRE);
     fprintf(fpout, " Make rMat time  =       %f,  %f\n", makerMat, makerMat / MainLoop * 100.0);
     fprintf(fpout, " Make gVec Mul   =       %f,  %f\n", makegVecMul, makegVecMul / MainLoop * 100.0);
     fprintf(fpout, " Make gVec time  =       %f,  %f\n", makegVec, makegVec / MainLoop * 100.0);
