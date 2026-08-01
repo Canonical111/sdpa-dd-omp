@@ -27,7 +27,12 @@
  * SUCH DAMAGE.
  *
  */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-07-31: OpenMP gated on work, width and nesting. See git log. */
 #include <mpblas_dd.h>
+#include "mplapack_omp_tuning.h"
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 void Rgemm_TN_omp(mplapackint m, mplapackint n, mplapackint k, dd_real alpha, dd_real *A, mplapackint lda, dd_real *B, mplapackint ldb, dd_real beta, dd_real *C, mplapackint ldc) {
     // Form  C := alpha*A'*B + beta*C.
@@ -46,7 +51,7 @@ void Rgemm_TN_omp(mplapackint m, mplapackint n, mplapackint k, dd_real alpha, dd
     }
 // main loop
 #ifdef _OPENMP
-#pragma omp parallel for private(i, j, l, temp)
+#pragma omp parallel for private(i, j, l, temp) if ((double)m * (double)n * (double)k >= MPLAPACK_OMP_MIN_GEMM_WORK && n >= MPLAPACK_OMP_MIN_GEMM_WIDTH && !omp_in_parallel()) num_threads(omp_get_max_threads() < (int)n ? omp_get_max_threads() : (int)n)
 #endif
     for (j = 0; j < n; j++) {
         for (i = 0; i < m; i++) {

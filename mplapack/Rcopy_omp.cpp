@@ -72,7 +72,9 @@ Based on http://www.netlib.org/blas/dcopy.f
 Rcopy copies a vector, x, to a vector, y.
 */
 
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-07-31: OpenMP gated on vector length. See git log. */
 #include <mpblas_dd.h>
+#include "mplapack_omp_tuning.h"
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -89,7 +91,7 @@ void Rcopy_omp(mplapackint n, dd_real *dx, mplapackint incx, dd_real *dy, mplapa
 
     if (incx == 1 && incy == 1) {
 #ifdef _OPENMP
-#pragma omp parallel for
+#pragma omp parallel for if (n >= MPLAPACK_OMP_MIN_VECTOR_N)
 #endif
         for (i = 0; i < n; i++) {
             dy[i] = dx[i];

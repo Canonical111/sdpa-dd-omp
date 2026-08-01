@@ -72,6 +72,7 @@ Based on http://www.netlib.org/blas/ddot.f
 Rdot forms the dot product of two vectors.
 */
 
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-07-31: Rdot runs serially in the original summation order. See git log. */
 #include <mpblas_dd.h>
 #ifdef _OPENMP
 #include <omp.h>
@@ -81,7 +82,7 @@ dd_real Rdot_omp(mplapackint n, dd_real *dx, mplapackint incx, dd_real *dy, mpla
     mplapackint ix = 0;
     mplapackint iy = 0;
     mplapackint i;
-    dd_real temp, templ;
+    dd_real temp;
 
     temp = 0.0;
 
@@ -93,21 +94,20 @@ dd_real Rdot_omp(mplapackint n, dd_real *dx, mplapackint incx, dd_real *dy, mpla
     temp = 0.0;
     if (incx == 1 && incy == 1) {
 // no reduction for multiple precision
-#ifdef _OPENMP
-#pragma omp parallel private(i, templ) shared(temp, dx, dy, n)
-#endif
-        {
-            templ = 0.0;
-#ifdef _OPENMP
-#pragma omp for
-#endif
-            for (i = 0; i < n; i++) {
-                templ += dx[i] * dy[i];
-            }
-#ifdef _OPENMP
-#pragma omp critical
-#endif
-            temp += templ;
+        /* SERIAL, in the original sequential order, bit for bit.
+           Upstream combined per-thread partial sums under a critical section, so the
+           summation order followed whichever thread won the lock. In double-double that
+           perturbs low bits and steers the trajectory: theta2 at 24 threads gave
+           51/65/80/56/50 iterations across 5 runs.
+
+           A fixed-chunk parallel reduction was tried as the fix and REJECTED on measurement:
+           over 8 problems it was never faster, and it pushed arch4 onto a 40%-longer
+           trajectory (101 vs 72 iterations). Running dot serially is both faster and a
+           stronger guarantee -- the result matches a serial run exactly, not merely across
+           thread counts. The rejected experiment is kept, with its data, in
+           patches/experiments/rdot_chunked.py; it is not part of the shipped series. */
+        for (i = 0; i < n; i++) {
+            temp += dx[i] * dy[i];
         }
     } else {
         for (i = 0; i < n; i++) {

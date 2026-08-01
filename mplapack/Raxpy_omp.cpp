@@ -71,7 +71,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Based on http://www.netlib.org/blas/daxpy.f
 */
 
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-07-31: OpenMP gated on vector length. See git log. */
 #include <mpblas_dd.h>
+#include "mplapack_omp_tuning.h"
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -95,7 +97,7 @@ void Raxpy_omp(mplapackint n, dd_real da, dd_real *dx, mplapackint incx, dd_real
 
     if (incx == 1 && incy == 1) {
 #ifdef _OPENMP
-#pragma omp parallel for
+#pragma omp parallel for if (n >= MPLAPACK_OMP_MIN_VECTOR_N)
 #endif
         for (i = 0; i < n; i++) {
             dy[i] += da * dx[i];
