@@ -66,9 +66,11 @@ To install a sibling solver, clone it first (they are separate repositories):
 - dd/gmp need `autoreconf -fi` (upstream ships no `configure`); qd tracks its `configure`.
   autoreconf refreshes two *tracked* boilerplate files (`INSTALL`; on gmp also `aclocal.m4`),
   and on macOS the qd build replaces tracked `config.guess`/`config.sub`/`configure` with
-  arm64-aware versions — the only working-tree changes a successful run leaves. Expected;
-  `git checkout --` them if unwanted, but leave `aclocal.m4` and the qd config files alone
-  before building again in the same tree.
+  arm64-aware versions — the only working-tree changes a successful run leaves. Expected.
+  If restoring them: first run `git diff` on each file and confirm its only changes are
+  these generated refreshes — never blanket-restore, and never touch a file that also has
+  pre-existing local edits; then `git checkout -- <file>` explicitly by name. Leave
+  `aclocal.m4` and the qd config files alone before building again in the same tree.
 - A serial build (`--serial`) is legitimate and CI-checked, not a failure mode.
 - Expected example objective: dd/qd `-4.1899999999999999e+01`, gmp `-4.1900000000000000e+01`
   (gmp at its default 256-bit working precision).
