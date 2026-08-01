@@ -27,6 +27,7 @@
  * SUCH DAMAGE.
  *
  */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-07-31: restored netlib dgemm zero-skip. See git log. */
 #include <mpblas_dd.h>
 
 void Rgemm_NT_omp(mplapackint m, mplapackint n, mplapackint k, dd_real alpha, dd_real *A, mplapackint lda, dd_real *B, mplapackint ldb, dd_real beta, dd_real *C, mplapackint ldc) {
@@ -50,9 +51,11 @@ void Rgemm_NT_omp(mplapackint m, mplapackint n, mplapackint k, dd_real alpha, dd
 #endif
     for (j = 0; j < n; j++) {
         for (l = 0; l < k; l++) {
-            temp = alpha * B[j + l * ldb];
-            for (i = 0; i < m; i++) {
-                C[i + j * ldc] += temp * A[i + l * lda];
+            if (B[j + l * ldb] != 0.0) {
+                temp = alpha * B[j + l * ldb];
+                for (i = 0; i < m; i++) {
+                    C[i + j * ldc] += temp * A[i + l * lda];
+                }
             }
         }
     }

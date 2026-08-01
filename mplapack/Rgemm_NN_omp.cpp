@@ -28,6 +28,7 @@
  *
  */
 
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-07-31: restored netlib dgemm zero-skip. See git log. */
 #include <mpblas_dd.h>
 #ifdef _OPENMP
 #include <omp.h>
@@ -55,9 +56,11 @@ void Rgemm_NN_omp(mplapackint m, mplapackint n, mplapackint k, dd_real alpha, dd
 #endif
     for (j = 0; j < n; j++) {
         for (l = 0; l < k; l++) {
-            temp = alpha * B[l + j * ldb];
-            for (i = 0; i < m; i++) {
-                C[i + j * ldc] += temp * A[i + l * lda];
+            if (B[l + j * ldb] != 0.0) {
+                temp = alpha * B[l + j * ldb];
+                for (i = 0; i < m; i++) {
+                    C[i + j * ldc] += temp * A[i + l * lda];
+                }
             }
         }
     }
