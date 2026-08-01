@@ -55,8 +55,32 @@ inside SPOOLES with a `struct timezone` error (seen with some toolchains — ups
 ```bash
 sed -i 's|^# CC = gcc|  CC = gcc|' external/spooles/work/internal/Make.inc
 ( cd external/spooles/work/internal && find . -name '*.o' -delete && rm -f spooles.a \
-  && make global -f makefile && cp spooles.a ../../../i/SPOOLES/lib/libspooles.a )
+  && make global -f makefile && mkdir -p ../../../i/SPOOLES/lib \
+  && cp spooles.a ../../../i/SPOOLES/lib/libspooles.a )
 make -j$(nproc)
+```
+
+### macOS (Apple Silicon) — verified on an M1 Max
+
+**Do not run plain `./configure`**: `/usr/bin/gcc` is Apple clang, which has no OpenMP —
+configure reports `option to support OpenMP... unsupported` and *silently builds a serial
+binary*. Homebrew GCC is required, and SPOOLES needs it spelled out too:
+
+```bash
+brew install gcc autoconf automake libtool
+GCC=$(ls $(brew --prefix gcc)/bin/gcc-[0-9]* | head -1)   # resolve the current version
+GXX=$(ls $(brew --prefix gcc)/bin/g++-[0-9]* | head -1)   # (brew install may have just upgraded it)
+autoreconf -fi
+./configure CC="$GCC" CXX="$GXX" --enable-openmp=yes
+make -j8 || true   # first pass stops inside SPOOLES (Apple's c99 rejects the flags) -- expected
+M=external/spooles/work/internal/Make.inc
+sed -i '' 's|^# CC = gcc|  CC = '$GCC'|' $M
+sed -i '' 's|^  CFLAGS += -O2 -funroll-all-loops|  CFLAGS += -O2 -funroll-all-loops -Wno-error=int-conversion -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types|' $M
+( cd external/spooles/work/internal && find . -name '*.o' -delete && rm -f spooles.a \
+  && make global -f makefile && mkdir -p ../../../i/SPOOLES/lib \
+  && cp spooles.a ../../../i/SPOOLES/lib/libspooles.a )
+make -j8
+otool -L sdpa_dd | grep gomp    # must print libgomp -- the proof the build is threaded
 ```
 
 Run with `OMP_NUM_THREADS=<physical cores>`, pinned (`taskset`/`OMP_PLACES=cores`).
