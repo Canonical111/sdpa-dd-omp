@@ -32,3 +32,9 @@ jobs:
         run: |
           ./sdpa_dd -ds example1.dat-s -o out.result -p param.sdpa
           grep objValPrimal out.result
+      - name: accept long high-precision decimal tokens
+        run: |
+          awk 'NR <= 5 { print; next } { v=$5; if (v !~ /\./) v=v "."; for (i=0;i<600;i++) v=v "0"; print $1,$2,$3,$4,v }' example1.dat-s > long-decimal.dat-s
+          ./sdpa_dd -ds long-decimal.dat-s -o long-decimal.result -p param.sdpa
+          grep -q 'phase.value = pdOPT' long-decimal.result
+          ! grep -qi nan long-decimal.result
