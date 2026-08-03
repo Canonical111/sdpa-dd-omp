@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 ------------------------------------------------------------- */
 
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-02: robust long-decimal DD input conversion. See git log. */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-03: lower-bound validation of input indices; checked fgets in header reader. See git log. */
 
 #define DIMACS_PRINT 0
 
@@ -284,7 +285,9 @@ void IO::read(FILE* fpData, int m,
 void IO::read(FILE *fpData, FILE *fpout, int &m, char *str) {
     while (true) {
         volatile int dummy = 0; // for gcc-3.3 bug
-        fgets(str, lengthOfString, fpData);
+        if (fgets(str, lengthOfString, fpData) == NULL) {
+            rError("IO::read:: unexpected end of file while reading the SDPA header");
+        }
         if (str[0] == '*' || str[0] == '"') {
             fprintf(fpout, "%s", str);
         } else {
@@ -349,6 +352,15 @@ void IO::read(FILE *fpData, DenseLinearSpace &xMat, Vector &yVec, DenseLinearSpa
 	       << ": j " << j
 	       << ": value " <<value);
 #endif
+
+            if (l < 1) {
+                fprintf(stderr, "SDPA initial point file: block index out of range in record (target=%d, l=%d, i=%d, j=%d)\n", target, l, i, j);
+                rError("io::read invalid block index in initial point file");
+            }
+            if (i < 1 || j < 1) {
+                fprintf(stderr, "SDPA initial point file: entry index out of range in record (target=%d, l=%d, i=%d, j=%d)\n", target, l, i, j);
+                rError("io::read invalid entry index in initial point file");
+            }
 
             if (l <= SDP_nBlock) {
                 // SDP part
@@ -635,6 +647,19 @@ void IO::setBlockStruct(FILE *fpData, InputData &inputData, int m, int SDP_nBloc
                 break;
             }
 
+            if (k < 0 || k > m) {
+                fprintf(stderr, "SDPA sparse data file: matrix index out of range [0,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", m, k, l, i, j);
+                rError("io::read invalid matrix index in input data");
+            }
+            if (l < 1 || l > nBlock) {
+                fprintf(stderr, "SDPA sparse data file: block index out of range [1,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", nBlock, k, l, i, j);
+                rError("io::read invalid block index in input data");
+            }
+            if (i < 1 || i > blockStruct[l - 1] || j < 1 || j > blockStruct[l - 1]) {
+                fprintf(stderr, "SDPA sparse data file: entry index out of range [1,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", blockStruct[l - 1], k, l, i, j);
+                rError("io::read invalid entry index in input data");
+            }
+
             if (blockType[l - 1] == 1) { // SDP part
                 int l2 = blockNumber[l - 1];
                 SDP_index[k].push_back(l2);
@@ -814,6 +839,19 @@ void IO::setElement(FILE *fpData, InputData &inputData, int m, int SDP_nBlock, i
 	       " i:" << i <<
 	       " j:" << j);
 #endif
+
+            if (k < 0 || k > m) {
+                fprintf(stderr, "SDPA sparse data file: matrix index out of range [0,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", m, k, l, i, j);
+                rError("io::read invalid matrix index in input data");
+            }
+            if (l < 1 || l > nBlock) {
+                fprintf(stderr, "SDPA sparse data file: block index out of range [1,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", nBlock, k, l, i, j);
+                rError("io::read invalid block index in input data");
+            }
+            if (i < 1 || i > blockStruct[l - 1] || j < 1 || j > blockStruct[l - 1]) {
+                fprintf(stderr, "SDPA sparse data file: entry index out of range [1,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", blockStruct[l - 1], k, l, i, j);
+                rError("io::read invalid entry index in input data");
+            }
 
             if (blockType[l - 1] == 1) { // SDP part
                 int l2 = blockNumber[l - 1];

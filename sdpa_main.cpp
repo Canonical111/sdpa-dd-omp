@@ -18,6 +18,7 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 ------------------------------------------------------------- */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-03: fatal parameter-file error exits non-zero; solver status propagated to exit code. See git log. */
 
 #ifndef _MAIN_
 #define _MAIN_
@@ -58,7 +59,7 @@ bool pinpal(char *dataFile, char *initFile, char *outFile, char *paraFile, bool 
         FILE *fpParameter = NULL;
         if ((fpParameter = fopen(paraFile, "r")) == NULL) {
             fprintf(Display, "Cannot open parameter file %s \n", paraFile);
-            exit(0);
+            exit(EXIT_FAILURE);
         } else {
             param.readFile(fpParameter);
             fclose(fpParameter);
@@ -668,7 +669,7 @@ int main(int argc, char **argv) {
             cout << "set       is STABLE_BUT_SLOW" << endl;
         }
     }
-    pinpal(dataFile, initFile, outFile, paraFile, isInitFile, isInitSparse, isDataSparse, isParameter, parameterType, Display);
-    return 0;
+    const bool solved = pinpal(dataFile, initFile, outFile, paraFile, isInitFile, isInitSparse, isDataSparse, isParameter, parameterType, Display);
+    return solved ? EXIT_SUCCESS : EXIT_FAILURE;
     fpu_fix_end(&oldcw);
 }

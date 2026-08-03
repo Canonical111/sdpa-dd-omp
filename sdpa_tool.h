@@ -18,6 +18,7 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 ------------------------------------------------------------- */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-03: fatal errors exit non-zero. See git log. */
 /*--------------------------------------------------
   rsdpa_tool.h
   $Id: rsdpa_tool.h,v 1.2 2004/09/01 06:34:12 makoto Exp $
@@ -31,6 +32,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 #include <iostream>
 #include <sys/time.h>
 #include <string>
+#include <cstdlib>
 
 #include <qd/dd_real.h>
 #include <chrono>
@@ -49,7 +51,7 @@ namespace sdpa {
 #define rError(message) \
     cout << message << " :: line " << __LINE__ \
          << " in " << __FILE__ << endl; \
-    exit(false)
+    exit(EXIT_FAILURE)
 
 #if 0
 #define rNewCheck() rMessage("new invoked");

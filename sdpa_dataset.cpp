@@ -18,6 +18,7 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 ------------------------------------------------------------- */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-03: WorkVariables DV2 init/terminate; InputData LP_nBlock init. See git log. */
 
 #include <sdpa_dataset.h>
 #include <sdpa_parts.h>
@@ -165,7 +166,7 @@ InputData::InputData() {
     SOCP_nConstraint = NULL;
     SOCP_constraint = NULL;
     SOCP_blockIndex = NULL;
-    SDP_nBlock = 0;
+    LP_nBlock = 0;
     LP_nConstraint = NULL;
     LP_constraint = NULL;
     LP_blockIndex = NULL;
@@ -669,7 +670,7 @@ void WorkVariables::initialize(int m, int SDP_nBlock, int *SDP_blockStruct, int 
     DLS1.initialize(SDP_nBlock, SDP_blockStruct, SOCP_nBlock, SOCP_blockStruct, LP_nBlock);
     DLS2.initialize(SDP_nBlock, SDP_blockStruct, SOCP_nBlock, SOCP_blockStruct, LP_nBlock);
     DV1.initialize(m);
-    DV1.initialize(m);
+    DV2.initialize(m);
 
     if (SDP_nBlock > 0) {
         SDP_BV1.initialize(SDP_nBlock, SDP_blockStruct);
@@ -705,7 +706,7 @@ void WorkVariables::terminate() {
     DLS1.terminate();
     DLS2.terminate();
     DV1.terminate();
-    DV1.terminate();
+    DV2.terminate();
 
     SDP_BV1.terminate();
     SDP_BV2.terminate();

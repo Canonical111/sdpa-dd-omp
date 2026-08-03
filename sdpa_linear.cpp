@@ -18,6 +18,7 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 ------------------------------------------------------------- */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-03: fatal eigensolver failure exits non-zero; rdpotf2_ returns on all paths. See git log. */
 
 #include <sdpa_linear.h>
 #include <sdpa_dataset.h>
@@ -142,7 +143,7 @@ dd_real Lal::getMinEigenValue(DenseMatrix &aMat, Vector &eigenVec, Vector &workV
             } else {
                 rMessage("getMinEigenValue:: cannot decomposition");
             }
-            exit(0);
+            exit(EXIT_FAILURE);
             return 0.0;
         }
         return eigenVec.ele[0];
@@ -523,8 +524,8 @@ int Lal::rdpotf2_(char *uplo, int *n, double *a, int *lda, int *info) {
             dscal_f77(&i, &d1, &a[(j + 1) + nRow * j], &IONE);
         }
     }
-    return 0;
 #endif
+    return 0;
 }
 
 int Lal::rdpotrf_(char *uplo, int *n, double *a, int *lda, int *info) {

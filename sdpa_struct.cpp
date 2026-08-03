@@ -18,6 +18,7 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 ------------------------------------------------------------- */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-03: SparseMatrix::copyFrom capacity fix; DenseMatrix::copyFrom leak fix; parameterized ctors initialize members. See git log. */
 
 #include <sdpa_struct.h>
 
@@ -284,14 +285,19 @@ SparseMatrix::SparseMatrix() {
     NonZeroEffect = 0;
 }
 
-SparseMatrix::SparseMatrix(int nRow, int nCol, SparseMatrix::Type type, int NonZeroNumber) { initialize(nRow, nCol, type, NonZeroNumber); }
+SparseMatrix::SparseMatrix(int nRow, int nCol, SparseMatrix::Type type, int NonZeroNumber) {
+    de_ele = NULL;
+    row_index = NULL;
+    column_index = NULL;
+    sp_ele = NULL;
+    initialize(nRow, nCol, type, NonZeroNumber);
+}
 
 SparseMatrix::~SparseMatrix() { terminate(); }
 
 void SparseMatrix::initialize(int nRow, int nCol, SparseMatrix::Type type, int NonZeroNumber) {
     // rMessage("SparseMatrix initialize");
 
-    SparseMatrix();
     if (nRow <= 0 || nCol <= 0) {
         rError("SparseMatrix:: Dimensions are nonpositive");
     }
@@ -399,8 +405,8 @@ void SparseMatrix::display(FILE *fpout) {
 
 bool SparseMatrix::copyFrom(SparseMatrix &other) {
     if (type != other.type || nRow != other.nRow || nCol != other.nCol) {
-        this->~SparseMatrix();
-        initialize(other.nRow, other.nCol, other.type, NonZeroNumber);
+        terminate();
+        initialize(other.nRow, other.nCol, other.type, other.NonZeroNumber);
         NonZeroCount = other.NonZeroCount;
         NonZeroEffect = other.NonZeroEffect;
         int length;
@@ -425,6 +431,7 @@ bool SparseMatrix::copyFrom(SparseMatrix &other) {
         switch (type) {
         case SPARSE:
             if (NonZeroNumber != other.NonZeroNumber) {
+                NonZeroNumber = other.NonZeroNumber;
                 delete[] row_index;
                 delete[] column_index;
                 delete[] sp_ele;
@@ -628,14 +635,19 @@ DenseMatrix::DenseMatrix() {
     de_ele = NULL;
 }
 
-DenseMatrix::DenseMatrix(int nRow, int nCol, DenseMatrix::Type type) { initialize(nRow, nCol, type); }
+DenseMatrix::DenseMatrix(int nRow, int nCol, DenseMatrix::Type type) {
+    this->nRow = 0;
+    this->nCol = 0;
+    this->type = DENSE;
+    de_ele = NULL;
+    initialize(nRow, nCol, type);
+}
 
 DenseMatrix::~DenseMatrix() { terminate(); }
 
 void DenseMatrix::initialize(int nRow, int nCol, DenseMatrix::Type type) {
     // rMessage("DenseMatrix::initialize");
 
-    DenseMatrix();
     if (nRow <= 0 || nCol <= 0) {
         rError("DenseMatrix:: Dimensions are nonpositive");
     }
@@ -744,10 +756,12 @@ bool DenseMatrix::copyFrom(SparseMatrix &other) {
         }
         nRow = other.nRow;
         nCol = other.nCol;
-        rNewCheck();
-        de_ele = new dd_real[nRow * nCol];
         if (de_ele == NULL) {
-            rError("DenseMatrix:: memory exhausted");
+            rNewCheck();
+            de_ele = new dd_real[nRow * nCol];
+            if (de_ele == NULL) {
+                rError("DenseMatrix:: memory exhausted");
+            }
         }
         length = nRow * nCol;
         Rcopy(length, other.de_ele, 1, de_ele, 1);
