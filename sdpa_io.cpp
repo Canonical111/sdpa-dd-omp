@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 #define DIMACS_PRINT 0
 
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: initialise the SOCP_sp_* locals; they were passed to C.initialize() while never assigned. See git log. */
 #include <sdpa_io.h>
 #include <vector>
 #include <algorithm>
@@ -666,10 +667,10 @@ void IO::setBlockStruct(FILE *fpData, InputData &inputData, int m, int SDP_nBloc
     SDP_sp_blockStruct = new int[SDP_nBlock];
     SDP_sp_NonZeroNumber = new int[SDP_nBlock];
     // for SOCP
-    int SOCP_sp_nBlock;
-    int *SOCP_sp_blockStruct;
-    int *SOCP_sp_index;
-    int *SOCP_sp_NonZeroNumber;
+    int SOCP_sp_nBlock = 0;
+    int *SOCP_sp_blockStruct = NULL;
+    int *SOCP_sp_index = NULL;
+    int *SOCP_sp_NonZeroNumber = NULL;
     // for LP
     int LP_sp_nBlock;
     int *LP_sp_index;

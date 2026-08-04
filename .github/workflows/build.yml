@@ -64,11 +64,13 @@ jobs:
           awk 'NR==5 {print "1 1 -3 -3 1.0"; next} {print}' example1.dat-s > neg-index.dat-s
           rc=$(run_rc ./sdpa_dd -ds neg-index.dat-s -o /tmp/neg.out -p param.sdpa)
           [ "$rc" -ne 0 ] || fail "negative index accepted (rc=0)"
+          [ "$rc" -lt 128 ] || fail "negative index killed by signal (rc=$rc), not diagnosed"
           grep -q objValPrimal /tmp/neg.out 2>/dev/null && fail "negative index produced a solution"
           # block index out of range
           awk 'NR==5 {print "1 99 1 1 1.0"; next} {print}' example1.dat-s > bad-block.dat-s
           rc=$(run_rc ./sdpa_dd -ds bad-block.dat-s -o /tmp/bb.out -p param.sdpa)
           [ "$rc" -ne 0 ] || fail "out-of-range block index accepted (rc=0)"
+          [ "$rc" -lt 128 ] || fail "bad block index killed by signal (rc=$rc), not diagnosed"
           # comment-only file: used to loop forever writing output
           printf '*comment only\n' > cmt.dat-s
           set +e; timeout 20 ./sdpa_dd -ds cmt.dat-s -o /tmp/cmt.out -p param.sdpa >/dev/null 2>&1; rc=$?; set -e
@@ -78,6 +80,7 @@ jobs:
           head -3 example1.dat-s > trunc.dat-s
           rc=$(run_rc ./sdpa_dd -ds trunc.dat-s -o /tmp/tr.out -p param.sdpa)
           [ "$rc" -ne 0 ] || fail "truncated file returned 0"
+          [ "$rc" -lt 128 ] || fail "truncated file killed by signal (rc=$rc), not diagnosed"
       - name: 1-thread and 8-thread results are identical (determinism guarantee)
         if: matrix.openmp == 'yes'
         run: |
@@ -279,3 +282,51 @@ jobs:
             echo "FAIL: sanitizer report(s) above" >&2; exit 1
           fi
           grep -q '#### example1' san.log || { echo "FAIL: no cases ran" >&2; exit 1; }
+  warnings:
+    # Promote the two warning classes this project has actually shipped bugs in:
+    #   -Wreturn-type   -- rdpotf2_ fell off the end of a non-void function, and eight
+    #                      functions in qd's mpack/Mutils.cpp compiled to empty bodies.
+    #   -Wuninitialized -- four SOCP_sp_* locals were passed to C.initialize() unassigned.
+    # NOTE the two-stage build. Promotion CANNOT be tree-wide: -Werror=uninitialized also
+    # promotes -Wmaybe-uninitialized, and `make CXXFLAGS=...` reaches every bundled
+    # dependency. On gmp the bundled GMP's own configure probes the compiler with a program
+    # that reads an uninitialised variable and would fail with a message pointing nowhere
+    # near the cause; on dd, SPOOLES QRreduce.c and sort.c become hard errors. So: build
+    # normally first, then recompile ONLY the first-party TUs with the strict flags.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y build-essential autoconf automake libtool clang
+      - name: normal build first (third-party deps must not see the strict flags)
+        run: |
+          set -e
+          autoreconf -fi >/dev/null 2>&1 || true
+          ./configure --enable-openmp=no >/dev/null
+          make -j"$(nproc)" >build.log 2>&1 || true
+          MK=$(find . -path '*spooles*' -name Make.inc | head -1)
+          if [ -n "$MK" ] && [ ! -x ./sdpa_dd ]; then
+            sed -i 's|^# CC = gcc|  CC = gcc|' "$MK"; d=$(dirname "$MK")
+            ( cd "$d" && find . -name '*.o' -delete && rm -f spooles.a && make global -f makefile >/dev/null 2>&1 \
+              && { cp spooles.a ../../../i/SPOOLES/lib/libspooles.a 2>/dev/null || cp spooles.a ./libspooles.a; } )
+            make -j"$(nproc)" >>build.log 2>&1
+          fi
+          test -x ./sdpa_dd
+      - name: recompile first-party translation units with the classes promoted to errors
+        run: |
+          set -e
+          CXX=${{ matrix.cc == 'gcc' && 'g++' || 'clang++' }}
+          F="-O2 -funroll-all-loops -Werror=return-type -Werror=uninitialized"
+          touch sdpa_*.cpp
+          make -j"$(nproc)" CXX="$CXX" CXXFLAGS="$F" 2>&1 | tee strict.log
+          # The flags MUST actually be on the compile lines. sdpa-gmp-omp's configure.ac
+          # does AC_SUBST([CXXFLAGS],[""]) and silently discards configure-time flags, so an
+          # earlier draft of this job passed while testing nothing at all. Comparing binary
+          # checksums does NOT detect that -- the build path is embedded and they differ
+          # regardless. Grepping the compile lines is the only sound check.
+          n=$(grep -c -- '-Werror=return-type' strict.log || true)
+          [ "$n" -ge 1 ] || { echo "FAIL: strict flags never reached a compile line" >&2; exit 1; }
+          echo "strict flags present on $n compile line(s)"
