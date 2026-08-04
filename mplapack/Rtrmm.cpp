@@ -26,6 +26,7 @@
  *
  */
 
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-03: added zero-skip to the B := alpha*A**T*B dot-product branches (netlib dtrmm has no such skip). See git log. */
 #include <mpblas_dd.h>
 
 void Rtrmm(const char *side, const char *uplo, const char *transa, const char *diag, mplapackint const m, mplapackint const n, dd_real const alpha, dd_real *a, mplapackint const lda, dd_real *b, mplapackint const ldb) {
@@ -160,7 +161,9 @@ void Rtrmm(const char *side, const char *uplo, const char *transa, const char *d
                             temp = temp * a[(i - 1) + (i - 1) * lda];
                         }
                         for (k = 1; k <= i - 1; k = k + 1) {
-                            temp += a[(k - 1) + (i - 1) * lda] * b[(k - 1) + (j - 1) * ldb];
+                            if (b[(k - 1) + (j - 1) * ldb] != zero) {
+                                temp += a[(k - 1) + (i - 1) * lda] * b[(k - 1) + (j - 1) * ldb];
+                            }
                         }
                         b[(i - 1) + (j - 1) * ldb] = alpha * temp;
                     }
@@ -173,7 +176,9 @@ void Rtrmm(const char *side, const char *uplo, const char *transa, const char *d
                             temp = temp * a[(i - 1) + (i - 1) * lda];
                         }
                         for (k = i + 1; k <= m; k = k + 1) {
-                            temp += a[(k - 1) + (i - 1) * lda] * b[(k - 1) + (j - 1) * ldb];
+                            if (b[(k - 1) + (j - 1) * ldb] != zero) {
+                                temp += a[(k - 1) + (i - 1) * lda] * b[(k - 1) + (j - 1) * ldb];
+                            }
                         }
                         b[(i - 1) + (j - 1) * ldb] = alpha * temp;
                     }

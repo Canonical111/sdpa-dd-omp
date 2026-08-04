@@ -31,3 +31,6 @@ mplapack/.deps/
 mplapack/.dirstamp
 *.result
 *~
+
+# macOS duplicate copies of the built binary ("sdpa_dd 2", "sdpa_dd 3", ...)
+sdpa_dd [0-9]*
