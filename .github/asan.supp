@@ -1,0 +1,18 @@
+# ci/asan.supp -- CONTINGENCY ONLY. Not required by measurement.
+#
+# Measured 2026-08-04 on pi (Ubuntu 24.04, gcc 13.3.0) with SPOOLES itself compiled
+# -fsanitize=address,undefined (952 __asan_report_* references in libspooles.a), over
+# example1 + control1/hinf1/truss5/truss6/truss8 + the three malformed inputs, AND
+# additionally with the sparse path forced on (sdpa_chordal.cpp "#if 0 // SPARSE
+# computation for debugging" flipped to #if 1, so Chordal::Spooles_MMD / _ND / _MS all
+# execute): 0 AddressSanitizer reports, 0 LeakSanitizer reports, 0 UBSan reports.
+#
+# So SPOOLES is NOT noisy and this file should stay unused. Enable it only if a
+# different runner image produces third-party reports, and delete entries again once
+# they stop appearing -- a live suppression here can hide a first-party regression,
+# because interceptor_via_lib matches the whole archive.
+#
+# interceptor_via_fun:IVL_*
+# interceptor_via_fun:Graph_*
+# interceptor_via_fun:ETree_*
+# interceptor_via_fun:InpMtx_*

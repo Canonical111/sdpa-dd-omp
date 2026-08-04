@@ -112,3 +112,170 @@ jobs:
           if diff -q t1.mutated t8.selected >/dev/null; then
             echo "FAIL: comparison cannot detect a changed matrix row" >&2; exit 1
           fi
+# Job C -- -ftrivial-auto-var-init=zero vs =pattern must give identical output.
+# This is the method that found the iMlaenv block-size bug. ASan cannot see an
+# in-bounds uninitialised stack read; this can.
+# Verified 2026-08-04 on pi (gcc 13.3.0) on all three forks at their dev tips.
+  auto-var-init:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y build-essential autoconf automake libtool
+      - name: compiler must support the flag at all
+        run: |
+          printf 'int main(){return 0;}\n' > /tmp/a.c
+          gcc -ftrivial-auto-var-init=pattern -c /tmp/a.c -o /tmp/a.o \
+            || { echo "FAIL: toolchain lacks -ftrivial-auto-var-init (needs GCC >= 12)" >&2; exit 1; }
+
+      - name: build twice, zero and pattern
+        run: |
+          set -e
+          build() {   # $1 = zero|pattern, $2 = destination dir
+            rm -rf "$2"; mkdir -p "$2"; tar -c --exclude=.git --exclude="$2" . | tar -x -C "$2"
+            ( cd "$2"
+              autoreconf -fi >/dev/null 2>&1 || true          # dd / gmp
+              ./configure --enable-openmp=yes >/dev/null      # qd: --with-qd-includedir=... --with-qd-libdir=...
+              F="-O2 -funroll-all-loops -ftrivial-auto-var-init=$1"
+              make -j"$(nproc)" CXXFLAGS="$F" CFLAGS="$F" > build.log 2>&1 || true
+              MK=$(find . -path '*spooles*' -name Make.inc | head -1)
+              if [ -n "$MK" ] && [ ! -x ./sdpa_dd ]; then
+                sed -i 's|^# CC = gcc|  CC = gcc|' "$MK"; d=$(dirname "$MK")
+                ( cd "$d" && find . -name '*.o' -delete && rm -f spooles.a && make global -f makefile >/dev/null 2>&1 \
+                  && { cp spooles.a ../../../i/SPOOLES/lib/libspooles.a 2>/dev/null || cp spooles.a ./libspooles.a; } )
+                make -j"$(nproc)" CXXFLAGS="$F" CFLAGS="$F" >> build.log 2>&1
+              fi
+              # Flags MUST go on the make line. sdpa-gmp-omp's configure.ac does
+              # AC_SUBST([CXXFLAGS],[""]) and discards configure-time flags entirely;
+              # measured, that made this whole job vacuous on gmp (0 of 3671 compile
+              # lines carried the flag, yet the two binaries still differed because the
+              # build path is embedded -- so "binaries differ" is NOT a valid check).
+              c=$(grep -E ' -c ' build.log | grep -c -- '-ftrivial-auto-var-init' || true)
+              [ "${c:-0}" -ge 10 ] || { echo "FAIL: only $c compile lines carried the flag" >&2; exit 1; }
+              grep -E ' -c ' build.log | grep -- 'sdpa_newton.cpp' | grep -q -- '-ftrivial-auto-var-init' \
+                || { echo "FAIL: first-party TUs did not get the flag" >&2; exit 1; }
+            )
+          }
+          build zero    build-zero
+          build pattern build-pattern
+
+      - name: identical output, or an uninitialised read has been found
+        run: |
+          set -u
+          for p in SDPLIB/data/control1 SDPLIB/data/theta1 SDPLIB/data/truss5 SDPLIB/data/arch0 SDPLIB/data/gpp100 SDPLIB/data/mcp100; do
+            [ -f "$p.dat-s.xz" ] && xz -dkf "$p.dat-s.xz"
+          done
+          sel() {   # same selector as the committed determinism step
+            grep -E 'objValPrimal|objValDual|phase\.value|Iteration =|relative gap|feas\.error' "$1" || true
+            awk '/^xVec *=/{f=1} f && !/time *=/' "$1"
+          }
+          : > z.sel; : > p.sel
+          for d in example1 SDPLIB/data/control1 SDPLIB/data/theta1 SDPLIB/data/truss5 \
+                   SDPLIB/data/arch0 SDPLIB/data/gpp100 SDPLIB/data/mcp100; do
+            f="$d.dat-s"; [ -f "$f" ] || continue
+            OMP_NUM_THREADS=2 ./build-zero/sdpa_dd    -ds "$f" -o zo.out -p param.sdpa >/dev/null 2>&1
+            OMP_NUM_THREADS=2 ./build-pattern/sdpa_dd -ds "$f" -o po.out -p param.sdpa >/dev/null 2>&1
+            echo "== $f" >> z.sel; sel zo.out >> z.sel
+            echo "== $f" >> p.sel; sel po.out >> p.sel
+          done
+          test -s z.sel || { echo "FAIL: selector matched nothing" >&2; exit 1; }
+          grep -q '^  *{' z.sel || { echo "FAIL: no indented matrix rows captured" >&2; exit 1; }
+          # Positive control: a changed continuation row must be detectable.
+          awk 'BEGIN{d=0} /^[[:space:]]+\{/ && !d {print "  {9.99e+99"; d=1; next} {print}' z.sel > z.mut
+          diff -q z.sel z.mut >/dev/null && { echo "FAIL: control mutated nothing -- check is vacuous" >&2; exit 1; }
+          diff -q z.mut p.sel >/dev/null && { echo "FAIL: comparison cannot detect a changed row" >&2; exit 1; }
+          diff -u z.sel p.sel || {
+            echo "FAIL: zero and pattern disagree -- there is a live uninitialised read." >&2
+            echo "Bisect it: build everything =zero, then recompile subsets with =pattern" >&2
+            echo "until the answer moves; the subset that moves it holds the read." >&2
+            exit 1; }
+# Job A -- AddressSanitizer + UndefinedBehaviorSanitizer (serial).
+# Substitute sdpa_dd = sdpa_dd | sdpa_gmp | sdpa_qd per fork, and use the CONFIGURE
+# line marked for that fork. Verified 2026-08-04 on pi (Ubuntu 24.04, gcc 13.3.0).
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y build-essential autoconf automake libtool
+      # (libqd-dev as well, for sdpa-qd-omp)
+
+      # The sanitizer harness must be able to fail. Prove it on a program with a
+      # known defect before trusting a clean solver run.
+      - name: harness self-check (a clean run must be a real result, not a silent no-op)
+        run: |
+          set -e
+          printf '#include <cstdlib>\nint main(){int*p=new int[4];p[4]=1;int r=p[4];delete[] p;return r&1;}\n' > /tmp/sc.cpp
+          g++ -fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g /tmp/sc.cpp -o /tmp/sc
+          set +e; ASAN_OPTIONS=detect_leaks=1:halt_on_error=0 /tmp/sc > /tmp/sc.log 2>&1; set -e
+          grep -qE 'ERROR: AddressSanitizer|runtime error:' /tmp/sc.log \
+            || { echo "FAIL: sanitizers did not report a known defect -- job would be vacuous" >&2; exit 1; }
+
+      - run: autoreconf -fi          # dd / gmp only; sdpa-qd-omp ships configure
+      # dd, gmp:
+      - run: ./configure --enable-openmp=no
+      # qd INSTEAD -- --enable-shared is REQUIRED: Makefile.am sets
+      #   sdpa_qd_LDFLAGS = -static  under @ENABLE_SHARED_FALSE@, and
+      #   "g++: error: cannot specify -static with -fsanitize=address" kills the link.
+      # - run: ./configure --enable-shared --with-qd-includedir=/usr/include --with-qd-libdir=/usr/lib/x86_64-linux-gnu
+
+      - name: build instrumented -- flags injected at MAKE time
+        run: |
+          set -e
+          # NOT at configure time: sdpa-gmp-omp's configure.ac ends with
+          #   AC_SUBST([CFLAGS], [""]) / AC_SUBST([CXXFLAGS], [""])
+          # so ./configure CXXFLAGS=... is discarded and every first-party object is
+          # built plain -O2 -march=native. Measured: 0 of 3671 compile lines carried
+          # -fsanitize, 0 __asan_report_* in sdpa_io.o -- the job passed vacuously.
+          SAN="-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g"
+          make -j"$(nproc)" CXXFLAGS="$SAN" CFLAGS="$SAN" LDFLAGS="$SAN" || true
+          MK=$(find . -path '*spooles*' -name Make.inc | head -1)
+          if [ -n "$MK" ]; then
+            sed -i 's|^# CC = gcc|  CC = gcc|' "$MK"
+            # SPOOLES hardcodes its own CFLAGS; without this it links UNinstrumented
+            # and ASan sees only allocator-level errors inside it.
+            printf '\n  CFLAGS += %s\n' "$SAN" >> "$MK"
+            d=$(dirname "$MK")
+            ( cd "$d" && find . -name '*.o' -delete && rm -f spooles.a && make global -f makefile \
+              && { cp spooles.a ../../../i/SPOOLES/lib/libspooles.a 2>/dev/null || cp spooles.a ./libspooles.a; } )
+          fi
+          rm -f ./sdpa_dd
+          make -j"$(nproc)" CXXFLAGS="$SAN" CFLAGS="$SAN" LDFLAGS="$SAN"
+
+      - name: instrumentation actually reached the code under test
+        run: |
+          set -e
+          n=$(nm sdpa_io.o 2>/dev/null | grep -c __asan_report || true)
+          [ "${n:-0}" -ge 1 ] || { echo "FAIL: sdpa_io.o is not instrumented -- flags were dropped" >&2; exit 1; }
+          s=$(find . -name 'libspooles.a' -exec nm {} \; 2>/dev/null | grep -c __asan_report || true)
+          [ "${s:-0}" -ge 1 ] || { echo "FAIL: SPOOLES is not instrumented" >&2; exit 1; }
+
+      - name: run under sanitizers -- any report fails the job
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=0:halt_on_error=0:print_stacktrace=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0
+        run: |
+          set -u
+          : > san.log
+          # dd / gmp ship SDPLIB; truss5/truss6 are the problems that reach the SPOOLES
+          # ordering path (m > 100 and nBlock > 5). sdpa-qd-omp ships no SDPLIB, so it
+          # gets example1 only -- see the note in the review.
+          for p in SDPLIB/data/control1 SDPLIB/data/hinf1 SDPLIB/data/truss5 SDPLIB/data/truss6; do
+            [ -f "$p.dat-s.xz" ] && xz -dkf "$p.dat-s.xz"
+          done
+          awk 'NR==5 {print "1 1 -3 -3 1.0"; next} {print}' example1.dat-s > neg-index.dat-s
+          printf '*comment only\n' > cmt.dat-s
+          head -3 example1.dat-s > trunc.dat-s
+          run() { echo "#### $1" >> san.log; shift; ( "$@" ) >> san.log 2>&1; echo "#### rc=$?" >> san.log; }
+          run example1     ./sdpa_dd -ds example1.dat-s -o /tmp/e1  -p param.sdpa
+          for p in SDPLIB/data/control1 SDPLIB/data/hinf1 SDPLIB/data/truss5 SDPLIB/data/truss6; do
+            [ -f "$p.dat-s" ] && run "$(basename $p)" ./sdpa_dd -ds "$p.dat-s" -o /tmp/o -p param.sdpa
+          done
+          run neg-index    ./sdpa_dd -ds neg-index.dat-s -o /tmp/n  -p param.sdpa
+          run comment-only timeout 120 ./sdpa_dd -ds cmt.dat-s -o /tmp/c -p param.sdpa
+          run truncated    ./sdpa_dd -ds trunc.dat-s -o /tmp/t  -p param.sdpa
+          # Grep the aggregate rather than trusting exit codes: the solver exits
+          # non-zero on the malformed cases by design, so rc cannot distinguish
+          # "rejected correctly" from "rejected after a sanitizer report".
+          if grep -nE 'ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:' san.log; then
+            echo "FAIL: sanitizer report(s) above" >&2; exit 1
+          fi
+          grep -q '#### example1' san.log || { echo "FAIL: no cases ran" >&2; exit 1; }

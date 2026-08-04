@@ -1,0 +1,7 @@
+# ci/ubsan.supp -- CONTINGENCY ONLY. Not required by measurement (0 UBSan reports on
+# 2026-08-04, SPOOLES instrumented, sparse path forced). See ci/asan.supp for the run
+# description. Uncomment only against an observed report, never pre-emptively.
+#
+# alignment:external/spooles/work/internal/
+# pointer-overflow:external/spooles/work/internal/
+# signed-integer-overflow:external/spooles/work/internal/
