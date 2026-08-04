@@ -1,6 +1,8 @@
 dnl
 dnl Configure for SDPA-DD 7.1.3
 dnl
+dnl MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: QD_FMA_ARG -- enable QD's
+dnl hardware fused-multiply-add path on aarch64 only. See git log.
 
 AC_INIT(sdpa-dd, 7.1.3)
 AC_CONFIG_AUX_DIR([.])
@@ -97,6 +99,26 @@ case "$host" in
         *)
 esac
 AM_CONDITIONAL(IS_MACOS, test x$IS_MACOS = x1)
+
+dnl Hardware FMA for the bundled QD build -- aarch64 ONLY.
+dnl
+dnl QD's own configure runs its FMA probe only under `case $host in powerpc*-*-*)`, so the
+dnl default --enable-fma=auto silently resolves to "none" on aarch64 and x86-64 alike:
+dnl QD_FMA/QD_FMS stay undefined and two_prod -- the most-executed primitive in the solver --
+dnl compiles the Dekker two-way-split fallback (~17 double ops) instead of p=a*b; err=fma(a,b,-p).
+dnl
+dnl The gate is aarch64-only on purpose, and it is NOT a portability oversight:
+dnl   - on aarch64, fmadd is baseline ISA, so __builtin_fma is a single instruction;
+dnl   - on x86-64 WITHOUT -mfma, GCC lowers __builtin_fma to a libm CALL, which is far slower
+dnl     than the Dekker split. This project builds generic x86-64 deliberately (no -march,
+dnl     no -mfma) so binaries stay bit-identical across AMD and Intel nodes.
+dnl On every non-aarch64 host QD_FMA_ARG expands empty and the arguments handed to QD's
+dnl configure are unchanged, so published x86-64 state hashes cannot move.
+case "$host_cpu" in
+  aarch64|arm64) QD_FMA_ARG="--enable-fma=gnu" ;;
+  *)             QD_FMA_ARG="" ;;
+esac
+AC_SUBST([QD_FMA_ARG])
 
 dnl How thread we link thread library esp. needed for spooles.
 case "$host" in

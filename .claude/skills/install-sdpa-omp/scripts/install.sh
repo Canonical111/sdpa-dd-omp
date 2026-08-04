@@ -7,6 +7,9 @@
 # failures (the first SPOOLES pass) are handled in explicit branches; anything else dies
 # with a message naming the log. Success is printed only after every requested operation
 # succeeded -- a stale binary or a failed --prefix install cannot produce a false DONE.
+#
+# MODIFIED (GPLv2 2a notice), 2026-08-04: build QD with hardware FMA on aarch64 only, and
+# namespace the QD cache by that choice. See git log.
 set -euo pipefail
 
 QD_VER=2.3.24
@@ -110,9 +113,24 @@ qd)
         if [ "$OS" != Darwin ] && [ -f /usr/include/qd/qd_real.h ]; then
             QD_DIR=/usr
         else
-            # Namespace the cache by ABI: an old library built by a different
-            # compiler or architecture must never be silently reused.
-            QD_DIR=$CACHE/qd-$QD_VER-$(uname -m)-gcc$("$GXX" -dumpversion | cut -d. -f1)
+            # TRAP: QD's configure runs its FMA probe only under `case $host in
+            # powerpc*-*-*)`, so --enable-fma=auto resolves to "none" here and two_prod --
+            # the most-executed primitive in the solver -- compiles the ~17-op Dekker split
+            # instead of p=a*b; err=fma(a,b,-p). Ask for it explicitly, but on aarch64 ONLY:
+            # there fmadd is baseline ISA and __builtin_fma is one instruction, whereas on
+            # x86-64 without -mfma GCC lowers __builtin_fma to a libm CALL that is slower
+            # than the split -- and generic x86-64 is a deliberate choice here so binaries
+            # stay bit-identical across AMD and Intel nodes.
+            QD_FMA_ARGS=()
+            case "$(uname -m)" in
+                aarch64|arm64) QD_FMA_ARGS=(--enable-fma=gnu); QD_FMA_TAG=fma ;;
+                *)             QD_FMA_TAG=nofma ;;
+            esac
+            # Namespace the cache by ABI *and* by the FMA decision: an old library built by
+            # a different compiler, architecture, or two_prod implementation must never be
+            # silently reused. Bumping the tag is what forces a rebuild of caches populated
+            # before 2026-08-04, which contain a non-FMA QD.
+            QD_DIR=$CACHE/qd-$QD_VER-$(uname -m)-gcc$("$GXX" -dumpversion | cut -d. -f1)-$QD_FMA_TAG
             # .complete is written only after make install succeeds -- a bare
             # libqd.a left by an interrupted install does not count.
             if [ ! -f "$QD_DIR/.complete" ]; then
@@ -128,7 +146,8 @@ qd)
                 tar xzf "$BUILD/qd.tar.gz" -C "$BUILD" \
                     || { rm -rf "$BUILD"; die "cannot extract the verified QD tarball"; }
                 if ( cd "$BUILD/qd-$QD_VER" && ./configure CC="$GCC" CXX="$GXX" \
-                        --prefix="$QD_DIR" --enable-fortran=no && make -j"$NPROC" && make install
+                        --prefix="$QD_DIR" --enable-fortran=no "${QD_FMA_ARGS[@]+"${QD_FMA_ARGS[@]}"}" \
+                        && make -j"$NPROC" && make install
                    ) >"$LOG/qd-build.log" 2>&1; then
                     touch "$QD_DIR/.complete"
                     rm -rf "$BUILD"
