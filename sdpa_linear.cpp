@@ -988,7 +988,7 @@ bool Lal::multiply(DenseMatrix &retMat, DenseMatrix &aMat, SparseMatrix &bMat, d
 }
 
 bool Lal::multiply(DenseMatrix &retMat, DenseMatrix &aMat, dd_real *scalar) {
-    if (retMat.nRow != aMat.nRow || retMat.nCol != retMat.nCol || retMat.type != aMat.type) {
+    if (retMat.nRow != aMat.nRow || retMat.nCol != aMat.nCol || retMat.type != aMat.type) {
         rError("multiply :: different matrix size");
     }
     if (scalar == NULL) {
@@ -1682,11 +1682,7 @@ bool Lal::multiply(DenseLinearSpace &retMat, DenseLinearSpace &aMat, dd_real *sc
         rError("multiply:: different memory size");
     }
     for (int l = 0; l < aMat.LP_nBlock; ++l) {
-        if (&scalar == NULL) {
-            retMat.LP_block[l] = aMat.LP_block[l];
-        } else {
-            retMat.LP_block[l] = aMat.LP_block[l] * (*scalar);
-        }
+        retMat.LP_block[l] = aMat.LP_block[l] * (*scalar);
     }
 
     return total_judge;
