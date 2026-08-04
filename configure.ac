@@ -114,11 +114,38 @@ dnl     than the Dekker split. This project builds generic x86-64 deliberately (
 dnl     no -mfma) so binaries stay bit-identical across AMD and Intel nodes.
 dnl On every non-aarch64 host QD_FMA_ARG expands empty and the arguments handed to QD's
 dnl configure are unchanged, so published x86-64 state hashes cannot move.
-case "$host_cpu" in
-  aarch64|arm64) QD_FMA_ARG="--enable-fma=gnu" ;;
-  *)             QD_FMA_ARG="" ;;
+dnl --enable-qd-fma=auto|gnu|no overrides the host gate. The DEFAULT is auto, which is
+dnl exactly the host gate described above, so the shipped build is unchanged. The explicit
+dnl values exist so that "same build, QD's explicit __builtin_fma turned off" can be
+dnl configured without hand-editing this file -- hand-editing, or overriding QD_FMA_ARG on a
+dnl make command line, does NOT invalidate external/qd's configure stamp and would silently
+dnl reuse the previous library.
+AC_ARG_ENABLE(qd-fma,
+[  --enable-qd-fma=MODE       QD hardware FMA: auto (aarch64 only), gnu, no],
+[qd_fma_mode=$enableval], [qd_fma_mode=auto])
+
+case "$qd_fma_mode" in
+  auto)
+    case "$host_cpu" in
+      aarch64|arm64) QD_FMA_ARG="--enable-fma=gnu" ;;
+      *)             QD_FMA_ARG="" ;;
+    esac ;;
+  gnu)     QD_FMA_ARG="--enable-fma=gnu" ;;
+  no|none) QD_FMA_ARG="--enable-fma=no" ;;
+  *) AC_MSG_ERROR([bad value ${qd_fma_mode} for --enable-qd-fma (use auto, gnu or no)]) ;;
 esac
 AC_SUBST([QD_FMA_ARG])
+
+dnl What the generated include/qd/qd_config.h must then look like. external/qd/Makefile.am
+dnl checks this after the sub-configure runs: the FMA decision is invisible in the SDPA
+dnl build otherwise, and a QD built without it has already once been mistaken for one built
+dnl with it.
+if test x"$QD_FMA_ARG" = x"--enable-fma=gnu"; then
+  QD_EXPECT_FMA=yes
+else
+  QD_EXPECT_FMA=no
+fi
+AC_SUBST([QD_EXPECT_FMA])
 
 dnl How thread we link thread library esp. needed for spooles.
 case "$host" in
@@ -139,6 +166,63 @@ CFLAGS="$CFLAGS -O2 -funroll-all-loops"
 CXXFLAGS="$CXXFLAGS -O2 -funroll-all-loops"
 AC_SUBST(CFLAGS)
 AC_SUBST(CXXFLAGS)
+
+dnl ---------------------------------------------------------------------------
+dnl Floating-point contraction pin (--enable-fp-contract=off|on|fast).
+dnl
+dnl Nothing in this build pinned -ffp-contract before this option existed, and GCC/clang
+dnl default to =fast for C++. dd_real arithmetic is header-inline, so the COMPILER decides
+dnl whether the compensation terms of the double-double algorithms get folded into an FMA.
+dnl On baseline x86-64 there is no FMA instruction to fold into, so those binaries behave as
+dnl if contraction were off; on aarch64 fmadd is baseline ISA, so they do not, and the two
+dnl platforms then execute different arithmetic. This option makes the semantics explicit.
+dnl
+dnl It appends the flag LAST, after -O2 -funroll-all-loops, so it wins over anything earlier,
+dnl and it is applied to CFLAGS and CXXFLAGS, i.e. to every SDPA and MPLAPACK translation
+dnl unit. It is also forwarded to the bundled QD sub-build -- see external/qd/Makefile.am;
+dnl a half-applied pin (SDPA TUs pinned, libqd.a not) would look like a numerical result
+dnl instead of the build bug it is.
+dnl
+dnl Default is "unpinned": FPCONTRACT_FLAG stays empty, no flag is added anywhere, and the
+dnl argument vector handed to QD's configure is byte-for-byte what it was before -- so an
+dnl unpinned build is unchanged by this option existing.
+AC_ARG_ENABLE(fp-contract,
+[  --enable-fp-contract=MODE  pin FP contraction: off|on|fast (default: compiler default)],
+[fp_contract_mode=$enableval], [fp_contract_mode=default])
+
+case "$fp_contract_mode" in
+  default)      FPCONTRACT_FLAG="" ;;
+  off|on|fast)  FPCONTRACT_FLAG="-ffp-contract=$fp_contract_mode" ;;
+  *) AC_MSG_ERROR([bad value ${fp_contract_mode} for --enable-fp-contract (use off, on or fast)]) ;;
+esac
+
+if test x"$FPCONTRACT_FLAG" != x; then
+  dnl A flag the compiler rejects must stop configure here, not silently vanish.
+  AC_MSG_CHECKING([whether $CXX accepts $FPCONTRACT_FLAG])
+  save_CXXFLAGS="$CXXFLAGS"
+  CXXFLAGS="$CXXFLAGS $FPCONTRACT_FLAG"
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[double f(double a,double b,double c){return a*b+c;}]],[[]])],
+    [AC_MSG_RESULT([yes])],
+    [CXXFLAGS="$save_CXXFLAGS"
+     AC_MSG_RESULT([no])
+     AC_MSG_ERROR([$CXX does not accept $FPCONTRACT_FLAG])])
+  CFLAGS="$CFLAGS $FPCONTRACT_FLAG"
+fi
+AC_SUBST([FPCONTRACT_FLAG])
+
+dnl QD's configure takes its C/C++ flags from autoconf's AC_PROG_CC/AC_PROG_CXX default
+dnl ("-g -O2"); QD's own configure.ac adds no optimisation flags of its own. external/qd's
+dnl sub-configure is therefore handed exactly that default PLUS the pin, so the only
+dnl difference between a pinned and an unpinned libqd is the contraction flag itself.
+dnl QD_FLAGS_ENV is EMPTY when nothing is pinned, which leaves the sub-configure environment
+dnl exactly as it was (autoconf then supplies "-g -O2" itself).
+QD_DEFAULT_FLAGS="-g -O2"
+if test x"$FPCONTRACT_FLAG" = x; then
+  QD_FLAGS_ENV=""
+else
+  QD_FLAGS_ENV="\"CFLAGS=$QD_DEFAULT_FLAGS $FPCONTRACT_FLAG\" \"CXXFLAGS=$QD_DEFAULT_FLAGS $FPCONTRACT_FLAG\""
+fi
+AC_SUBST([QD_FLAGS_ENV])
 
 dnl some dummy settings
 if test x$SPOOLES_INCLUDEDIR = x; then
