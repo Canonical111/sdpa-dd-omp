@@ -51,6 +51,16 @@ void Rsyr2(const char *uplo, mplapackint const n, dd_real const alpha, dd_real *
 void Rger(mplapackint const m, mplapackint const n, dd_real const alpha, dd_real *x, mplapackint const incx, dd_real *y, mplapackint const incy, dd_real *a, mplapackint const lda);
 void Rtrmm(const char *side, const char *uplo, const char *transa, const char *diag, mplapackint const m, mplapackint const n, dd_real const alpha, dd_real *a, mplapackint const lda, dd_real *b, mplapackint const ldb);
 void Rtrsm(const char *side, const char *uplo, const char *transa, const char *diag, mplapackint const m, mplapackint const n, dd_real const alpha, dd_real *a, mplapackint const lda, dd_real *b, mplapackint const ldb);
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: declared the two column-parallel
+   Left-side triangular kernels. See git log.
+   These are NOT drop-in replacements for Rtrmm/Rtrsm at every call site by policy: they exist
+   so that the Cholesky-inverse phase can be threaded WITHOUT also threading Rtrsm inside
+   Rpotrf or Rtrmm inside Rlarfb. Call them only from Lal::getInvLowTriangularMatrix and
+   Jal::getInvCholAndInv. Each parallelises the Left-side case it implements over the columns
+   of B and delegates every other case, and every sub-threshold call, to the serial kernel;
+   results are bit-identical to it at any thread count. */
+void Rtrmm_omp(const char *side, const char *uplo, const char *transa, const char *diag, mplapackint const m, mplapackint const n, dd_real const alpha, dd_real *a, mplapackint const lda, dd_real *b, mplapackint const ldb);
+void Rtrsm_omp(const char *side, const char *uplo, const char *transa, const char *diag, mplapackint const m, mplapackint const n, dd_real const alpha, dd_real *a, mplapackint const lda, dd_real *b, mplapackint const ldb);
 void Rgemm(const char *transa, const char *transb, mplapackint const m, mplapackint const n, mplapackint const k, dd_real const alpha, dd_real *a, mplapackint const lda, dd_real *b, mplapackint const ldb, dd_real const beta, dd_real *c, mplapackint const ldc);
 void Rsyrk(const char *uplo, const char *trans, mplapackint const n, mplapackint const k, dd_real const alpha, dd_real *a, mplapackint const lda, dd_real const beta, dd_real *c, mplapackint const ldc);
 void Rsyr2k(const char *uplo, const char *trans, mplapackint const n, mplapackint const k, dd_real const alpha, dd_real *a, mplapackint const lda, dd_real *b, mplapackint const ldb, dd_real const beta, dd_real *c, mplapackint const ldc);

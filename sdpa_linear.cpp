@@ -403,7 +403,15 @@ bool Lal::getInvLowTriangularMatrix(DenseMatrix &retMat, DenseMatrix &aMat) {
     switch (retMat.type) {
     case DenseMatrix::DENSE:
         retMat.setIdentity();
-        Rtrsm("Left", "Lower", "NoTraspose", "NonUnitDiagonal", aMat.nRow, aMat.nCol, MONE, aMat.de_ele, aMat.nRow, retMat.de_ele, retMat.nRow);
+        /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: Rtrsm -> Rtrsm_omp. This solve
+           against an identity RHS is the larger half of the Cholesky-inverse phase (42.0% of
+           wall on gpp124-1, 39.7% on arch0 at 8 threads) and was entirely serial. Rtrsm_omp
+           splits it over the columns of retMat, which leaves each output element's arithmetic
+           and its order untouched, so the result is bit-identical to Rtrsm; it falls back to
+           Rtrsm below its work gate and for any case but Left/Lower/NoTranspose. Deliberately
+           NOT done by threading Rtrsm itself, which would also thread Rpotrf's inner solves.
+           See git log. */
+        Rtrsm_omp("Left", "Lower", "NoTraspose", "NonUnitDiagonal", aMat.nRow, aMat.nCol, MONE, aMat.de_ele, aMat.nRow, retMat.de_ele, retMat.nRow);
         break;
     case DenseMatrix::COMPLETION:
         rError("DenseMatrix:: no support for COMPLETION");

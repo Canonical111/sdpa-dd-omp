@@ -47,7 +47,7 @@ dd_real Jal::trace(DenseLinearSpace &aMat) {
 }
 
 // calculate the minimum eigen value of lMat*xMat*(lMat^T)
-// lMat is lower triangular¡¢xMat is symmetric
+// lMat is lower triangularï¿½ï¿½xMat is symmetric
 // block size > 20   : Lanczos method
 // block size <= 20  : QR method
 // QR method: workVec is temporary space and needs
@@ -158,7 +158,16 @@ bool Jal::getInvCholAndInv(DenseLinearSpace &invCholMat, DenseLinearSpace &inver
 
     for (int l = 0; l < aMat.SDP_nBlock; ++l) {
         inverseMat.SDP_block[l].copyFrom(invCholMat.SDP_block[l]);
-        Rtrmm("Left", "Lower", "Transpose", "NonUnitDiag", invCholMat.SDP_block[l].nRow, invCholMat.SDP_block[l].nCol, MONE, invCholMat.SDP_block[l].de_ele, invCholMat.SDP_block[l].nRow, inverseMat.SDP_block[l].de_ele, inverseMat.SDP_block[l].nRow);
+        /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: Rtrmm -> Rtrmm_omp. Forming
+           Z^-1 = L**T * L here is the other half of the Cholesky-inverse phase and was
+           entirely serial. Rtrmm_omp splits it over the columns of inverseMat, which leaves
+           each output element's arithmetic and its order untouched, so the result is
+           bit-identical to Rtrmm; it falls back to Rtrmm below its work gate and for any case
+           but Left/Lower/Transpose. Deliberately NOT done by threading Rtrmm itself, which
+           would also thread Rlarfb's Right-side calls. Note the loop over blocks stays
+           serial -- the threading is inside one block, so omp_in_parallel() is false on
+           entry as the gate requires. See git log. */
+        Rtrmm_omp("Left", "Lower", "Transpose", "NonUnitDiag", invCholMat.SDP_block[l].nRow, invCholMat.SDP_block[l].nCol, MONE, invCholMat.SDP_block[l].de_ele, invCholMat.SDP_block[l].nRow, inverseMat.SDP_block[l].de_ele, inverseMat.SDP_block[l].nRow);
     }
     for (int l = 0; l < aMat.SOCP_nBlock; ++l) {
         rError("rNewton:: we don't make this ruoutin");
