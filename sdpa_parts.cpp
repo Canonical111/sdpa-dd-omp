@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 ------------------------------------------------------------- */
 
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-07-31: per-formula bMat timers reported as worker-seconds. See git log. */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: every parameter-file conversion is checked; a malformed entry is diagnosed instead of leaving the default in place. See git log. */
 #include <sdpa_parts.h>
 
 namespace sdpa {
@@ -170,17 +171,32 @@ void Parameter::setDefaultParameter(Parameter::parameterType type) {
         epsilonDash = 1.0e-30;
     }
 }
+namespace {
+
+// The parameter file is read on top of the defaults set by setDefaultParameter(),
+// so an unchecked conversion does not fail -- it silently leaves the default in
+// place and the run proceeds with parameters the user never asked for. Every
+// conversion is therefore checked, and the offending entry is named.
+void requireParameter(int status, const char *name, int lineNumber) {
+    if (status <= 0) {
+        fprintf(stderr, "SDPA parameter file: entry %d (%s) is missing or is not a number\n", lineNumber, name);
+        rError("Parameter::readFile invalid entry in parameter file");
+    }
+}
+
+} // namespace
+
 void Parameter::readFile(FILE *parameterFile) {
-    fscanf(parameterFile, "%d%*[^\n]", &maxIteration);
-    fscanf(parameterFile, "%lf%*[^\n]", &epsilonStar);
-    fscanf(parameterFile, "%lf%*[^\n]", &lambdaStar);
-    fscanf(parameterFile, "%lf%*[^\n]", &omegaStar);
-    fscanf(parameterFile, "%lf%*[^\n]", &lowerBound);
-    fscanf(parameterFile, "%lf%*[^\n]", &upperBound);
-    fscanf(parameterFile, "%lf%*[^\n]", &betaStar);
-    fscanf(parameterFile, "%lf%*[^\n]", &betaBar);
-    fscanf(parameterFile, "%lf%*[^\n]", &gammaStar);
-    fscanf(parameterFile, "%lf%*[^\n]", &epsilonDash);
+    requireParameter(fscanf(parameterFile, "%d%*[^\n]", &maxIteration), "maxIteration", 1);
+    requireParameter(fscanf(parameterFile, "%lf%*[^\n]", &epsilonStar), "epsilonStar", 2);
+    requireParameter(fscanf(parameterFile, "%lf%*[^\n]", &lambdaStar), "lambdaStar", 3);
+    requireParameter(fscanf(parameterFile, "%lf%*[^\n]", &omegaStar), "omegaStar", 4);
+    requireParameter(fscanf(parameterFile, "%lf%*[^\n]", &lowerBound), "lowerBound", 5);
+    requireParameter(fscanf(parameterFile, "%lf%*[^\n]", &upperBound), "upperBound", 6);
+    requireParameter(fscanf(parameterFile, "%lf%*[^\n]", &betaStar), "betaStar", 7);
+    requireParameter(fscanf(parameterFile, "%lf%*[^\n]", &betaBar), "betaBar", 8);
+    requireParameter(fscanf(parameterFile, "%lf%*[^\n]", &gammaStar), "gammaStar", 9);
+    requireParameter(fscanf(parameterFile, "%lf%*[^\n]", &epsilonDash), "epsilonDash", 10);
 }
 
 void Parameter::display(FILE *fpout) {
