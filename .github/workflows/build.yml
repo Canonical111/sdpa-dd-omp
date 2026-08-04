@@ -38,3 +38,77 @@ jobs:
           ./sdpa_dd -ds long-decimal.dat-s -o long-decimal.result -p param.sdpa
           grep -q 'phase.value = pdOPT' long-decimal.result
           ! grep -qi nan long-decimal.result
+      - name: fatal errors must exit non-zero
+        run: |
+          set -u
+          fail() { echo "FAIL: $1" >&2; exit 1; }
+          run_rc() { set +e; "$@" >/dev/null 2>&1; echo $?; set -e; }
+          # (a) nonexistent data file
+          rc=$(run_rc ./sdpa_dd -ds no_such_file.dat-s -o /tmp/x.out -p param.sdpa)
+          [ "$rc" -ne 0 ] || fail "missing data file returned 0"
+          # (b) unwritable output path
+          rc=$(run_rc ./sdpa_dd -ds example1.dat-s -o /nonexistent_dir/x.out -p param.sdpa)
+          [ "$rc" -ne 0 ] || fail "unwritable output returned 0"
+          # (c) missing parameter file
+          rc=$(run_rc ./sdpa_dd -ds example1.dat-s -o /tmp/x.out -p no_such_param.sdpa)
+          [ "$rc" -ne 0 ] || fail "missing parameter file returned 0"
+          # (d) a successful solve must still be 0
+          rc=$(run_rc ./sdpa_dd -ds example1.dat-s -o /tmp/ok.out -p param.sdpa)
+          [ "$rc" -eq 0 ] || fail "successful solve returned $rc"
+      - name: malformed input is rejected, never silently solved
+        run: |
+          set -u
+          fail() { echo "FAIL: $1" >&2; exit 1; }
+          run_rc() { set +e; "$@" >/dev/null 2>&1; echo $?; set -e; }
+          # negative entry index: used to write out of bounds and print a full solution
+          awk 'NR==5 {print "1 1 -3 -3 1.0"; next} {print}' example1.dat-s > neg-index.dat-s
+          rc=$(run_rc ./sdpa_dd -ds neg-index.dat-s -o /tmp/neg.out -p param.sdpa)
+          [ "$rc" -ne 0 ] || fail "negative index accepted (rc=0)"
+          grep -q objValPrimal /tmp/neg.out 2>/dev/null && fail "negative index produced a solution"
+          # block index out of range
+          awk 'NR==5 {print "1 99 1 1 1.0"; next} {print}' example1.dat-s > bad-block.dat-s
+          rc=$(run_rc ./sdpa_dd -ds bad-block.dat-s -o /tmp/bb.out -p param.sdpa)
+          [ "$rc" -ne 0 ] || fail "out-of-range block index accepted (rc=0)"
+          # comment-only file: used to loop forever writing output
+          printf '*comment only\n' > cmt.dat-s
+          set +e; timeout 20 ./sdpa_dd -ds cmt.dat-s -o /tmp/cmt.out -p param.sdpa >/dev/null 2>&1; rc=$?; set -e
+          [ "$rc" -ne 124 ] || fail "comment-only file still hangs (timed out)"
+          [ "$rc" -ne 0 ] || fail "comment-only file returned 0"
+          # truncated file
+          head -3 example1.dat-s > trunc.dat-s
+          rc=$(run_rc ./sdpa_dd -ds trunc.dat-s -o /tmp/tr.out -p param.sdpa)
+          [ "$rc" -ne 0 ] || fail "truncated file returned 0"
+      - name: 1-thread and 8-thread results are identical (determinism guarantee)
+        if: matrix.openmp == 'yes'
+        run: |
+          set -euo pipefail
+          OMP_NUM_THREADS=1 ./sdpa_dd -ds example1.dat-s -o t1.out -p param.sdpa >/dev/null
+          OMP_NUM_THREADS=8 ./sdpa_dd -ds example1.dat-s -o t8.out -p param.sdpa >/dev/null
+          # Select the solution-bearing content rather than excluding timing lines: an
+          # exclusion list has to know every timer format the solver can print and rots
+          # silently when one is added. Two parts: the scalar convergence fields, and the
+          # WHOLE final solution section from "xVec =" onward -- matrix continuation rows
+          # are indented, so a "^{" pattern would compare only each block's first row.
+          # The timing block follows the matrices, hence the time= drop.
+          sel() {
+            grep -E 'objValPrimal|objValDual|phase\.value|Iteration =|relative gap|feas\.error' "$1" || true
+            awk '/^xVec *=/{f=1} f && !/time *=/' "$1"
+          }
+          # Write to regular files: `test -s <(...)` is always false, because process
+          # substitution exposes a pipe and a pipe reports size zero.
+          sel t1.out > t1.selected
+          sel t8.out > t8.selected
+          test -s t1.selected || { echo "FAIL: selector matched nothing" >&2; exit 1; }
+          grep -q '^  *{' t1.selected || { echo "FAIL: no indented matrix rows captured" >&2; exit 1; }
+          diff -u t1.selected t8.selected || { echo "FAIL: 1 vs 8 threads differ" >&2; exit 1; }
+          # Positive control: perturbing an indented continuation row MUST be detected.
+          # (awk, not `sed '0,/re/'` -- that range form is a GNU extension and is a silent
+          # no-op under BSD sed, which would make this control vacuous on some runners.)
+          awk 'BEGIN{done=0} /^[[:space:]]+\{/ && !done {print "  {9.99e+99"; done=1; next} {print}' \
+            t1.selected > t1.mutated
+          if diff -q t1.selected t1.mutated >/dev/null; then
+            echo "FAIL: positive control did not mutate anything -- the check is vacuous" >&2; exit 1
+          fi
+          if diff -q t1.mutated t8.selected >/dev/null; then
+            echo "FAIL: comparison cannot detect a changed matrix row" >&2; exit 1
+          fi
