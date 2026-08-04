@@ -30,7 +30,25 @@ mplapack/*.o
 mplapack/.deps/
 mplapack/.dirstamp
 *.result
-*~
 
 # macOS duplicate copies of the built binary ("sdpa_dd 2", "sdpa_dd 3", ...)
 sdpa_dd [0-9]*
+
+# OS and editor noise -- never track these. A tracked .DS_Store was found in the
+# dd fork and removed; these rules exist so it cannot come back in any of them.
+.DS_Store
+.DS_Store?
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+__MACOSX/
+Thumbs.db
+ehthumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
