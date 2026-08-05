@@ -46,6 +46,27 @@ Results are **thread-count independent**: a checksum over every scalar of the fi
 `xMat`/`yVec`/`zMat` is identical at 1/2/4/8/24 threads. Unpatched upstream is *not*
 reproducible when threaded (iteration counts and even objectives vary run to run).
 
+Results are also **platform independent between arm64 and x86-64**, which upstream is not.
+GCC and clang default to `-ffp-contract=fast` for C++, and `dd_real` arithmetic is
+header-inline, so without a pin *the compiler* decides whether the compensation terms of the
+double-double algorithms get folded into an FMA — and folding there is not an identity, because
+it deletes the very rounding error `two_sum` exists to capture. On baseline x86-64 there is no
+FMA to fold into, so those binaries behave as if contraction were off; on arm64 `fmadd` is
+baseline ISA, so they do not. The two platforms then run different arithmetic.
+
+This fork therefore builds with `-ffp-contract=off` **by default**, applied to every SDPA and
+MPLAPACK translation unit *and* to the bundled QD. With it, an M1 build matches the published
+x86-64 reference on **20 of 20** problems — iteration counts and full-precision objectives —
+where the unpinned build matches on none at the state-hash level. Hardware FMA is unaffected:
+`-ffp-contract=off` does not disable an explicit `__builtin_fma`, so QD's `two_prod` keeps its
+single `fmsub` and the aarch64 speedup is retained in full. Cost is ~1% per iteration at 1
+thread and ~1.7% at 8. x86-64 output is unchanged — all 76 translation units compile to
+byte-identical `.text` with and without the flag.
+
+Pass `--enable-fp-contract=fast` to recover the old, platform-dependent behaviour. Note that
+iteration counts published for arm64 *before* this default are counts of the unpinned solver;
+see [`bench/b4_mac_rebaseline.tsv`](bench/b4_mac_rebaseline.tsv) for the exact deltas.
+
 Evidence in this repository: [BENCHMARKS.md](BENCHMARKS.md) (generated tables, methodology),
 [`bench/pi_dd_v2.tsv`](bench/pi_dd_v2.tsv) and [`bench/mac_dd_v2.tsv`](bench/mac_dd_v2.tsv)
 (per-repeat raw data), [`bench/statehash_pi.tsv`](bench/statehash_pi.tsv) (thread-count

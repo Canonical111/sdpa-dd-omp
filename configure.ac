@@ -183,12 +183,39 @@ dnl unit. It is also forwarded to the bundled QD sub-build -- see external/qd/Ma
 dnl a half-applied pin (SDPA TUs pinned, libqd.a not) would look like a numerical result
 dnl instead of the build bug it is.
 dnl
-dnl Default is "unpinned": FPCONTRACT_FLAG stays empty, no flag is added anywhere, and the
-dnl argument vector handed to QD's configure is byte-for-byte what it was before -- so an
-dnl unpinned build is unchanged by this option existing.
+dnl DEFAULT IS "off", i.e. this fork ships with contraction pinned. 2026-08-05.
+dnl
+dnl That default is a deliberate change, and it is what makes the arm64 and x86-64 builds of
+dnl this fork the same solver numerically. Measured on the complete published Mac problem set,
+dnl an M1 build with the pin matches the published x86-64 reference on 20 of 20 problems --
+dnl iteration counts AND full-precision objectives -- where the unpinned build matches on none
+dnl of them at the state-hash level. Nine iteration counts and three objectives move, and every
+dnl one of them moves ONTO the x86 value; none moves away and none lands anywhere else. See
+dnl results/b4_mac_rebaseline.tsv.
+dnl
+dnl Two of those disagreements were invisible to the comparison this project had been using to
+dnl check for cross-platform agreement: mcp100 changed 66 -> 54 iterations at an UNCHANGED
+dnl objective, and qap9 kept 19 iterations while its objective moved at the 8th significant
+dnl digit. An iteration check misses qap9; an objective check misses mcp100.
+dnl
+dnl Cost: 1.0% per iteration at 1 thread, 1.7% at 8, against a per-cell repeat spread of
+dnl 0.1-3.1% on the measuring machine -- at or below resolution. Total iterations over 12
+dnl problems went 630 -> 626, a small net saving. (The audit's estimate of 9-10% does not
+dnl reproduce: gpp124-1 measured -0.1%, arch0 +2.3%.) A1's hardware FMA is retained in full:
+dnl -ffp-contract=off does not disable an explicit __builtin_fma, verified at the instruction
+dnl level -- 143 fused instructions survive in libqd under the pin, versus 0 with FMA disabled,
+dnl and the pinned-no-FMA build is 1.69x SLOWER.
+dnl
+dnl x86-64 is provably unaffected: all 76 translation units compile to byte-identical .text
+dnl with and without the flag, and the unpinned build contains ZERO fused FMA instructions --
+dnl there is nothing on baseline x86-64 for contraction to fold into. So the published x86
+dnl benchmark and state-hash tables are untouched by this default.
+dnl
+dnl Pass --enable-fp-contract=fast to recover the old unpinned behaviour, or =default to add no
+dnl flag at all.
 AC_ARG_ENABLE(fp-contract,
-[  --enable-fp-contract=MODE  pin FP contraction: off|on|fast (default: compiler default)],
-[fp_contract_mode=$enableval], [fp_contract_mode=default])
+[  --enable-fp-contract=MODE  pin FP contraction: off|on|fast|default (default: off)],
+[fp_contract_mode=$enableval], [fp_contract_mode=off])
 
 case "$fp_contract_mode" in
   default)      FPCONTRACT_FLAG="" ;;
