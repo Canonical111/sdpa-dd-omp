@@ -44,6 +44,7 @@ mplapack/Rgemm_TN_omp.cpp\
 mplapack/Rgemm_TT_omp.cpp\
 mplapack/Rtrsm_omp.cpp\
 mplapack/Rtrmm_omp.cpp\
+mplapack/Rsyrk_omp.cpp\
 mplapack/mplapack_omp_tuning.h\
 mplapack/mpblas_dd.h\
 mplapack/mplapack_config.h\

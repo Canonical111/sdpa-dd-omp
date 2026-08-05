@@ -10,8 +10,10 @@
 /* Bump when macros are added or removed; the generator refuses a stale header.
    4: MIN_TRSM_WORK_8T/MIN_TRMM_WORK_8T renamed to MIN_TRSM_WORK/MIN_TRMM_WORK -- the
       measurement showed the break-even does not track the team size, so the "_8T" in the
-      name (meaning "the value at 8 threads, to be scaled") no longer describes them. */
-#define MPLAPACK_OMP_TUNING_VERSION 4
+      name (meaning "the value at 8 threads, to be scaled") no longer describes them.
+   5: added MIN_POTRF_SYRK_WORK / MIN_POTRF_TRSM_WORK / POTRF_WORK / MIN_POTRF_WIDTH for the
+      Rpotrf lower-path panel kernels (Rsyrk_omp, Rtrsm_omp's Right case). */
+#define MPLAPACK_OMP_TUNING_VERSION 5
 
 /* Tuning knobs for the mplapack OpenMP kernels. Override at compile time with -D. */
 
@@ -143,6 +145,174 @@
    with n=1 can clear the work gate yet offer a single iteration to the team. */
 #ifndef MPLAPACK_OMP_MIN_TRI_WIDTH
 #define MPLAPACK_OMP_MIN_TRI_WIDTH 2
+#endif
+
+/* ------------- Rpotrf lower-path panel kernels: Rsyrk_omp / Rtrsm_omp (Right) -------------
+
+   CALIBRATED, 2026-08-04/05, on both machines. Method as for the Left gates above: the two
+   kernels were called directly with their gate removed, on the shapes Rpotrf actually
+   produces (taken from a per-call census of 15 SDPLIB problems: 10263 Rpotrf calls, 8337
+   panel iterations, 22888 logged lines), serial baseline in a separate OMP_NUM_THREADS=1
+   process, threads one per physical core, each size warmed ~0.4 s first, statistic = min
+   over repetitions. thanos = EPYC 7232P (8 physical), pi = i9-13900K (8 P + 16 E = 24).
+   Full tables and the raw data: patches/b1_notes/b1_gate_calibration{,_pi}.md.
+
+   STRUCTURE FIRST -- three facts that decide more than the constants do.
+
+   * These kernels are reached only when the matrix order exceeds nb. iMlaenv returns nb = 64
+     for POTRF (iMlaenv.cpp:222-225), and Rpotrf takes the unblocked Rpotrf2 recursion
+     whenever nb >= n. So every Cholesky of order <= 64 bypasses both panel kernels entirely,
+     whatever these constants say: 8728 of 10263 census calls (85%), including every Cholesky
+     of hinf10, control1, truss5's blocks and theta1's n = 50 block. That fallback, not this
+     gate, is what excludes the small per-SDP-block factorisations.
+
+   * For Rsyrk the gate must be on WORK, not on a dimension: the panel Rsyrk is short and fat,
+     n = jb <= 64 always while k grows to the whole factored prefix (up to 1536 in a 1600
+     Cholesky), so a gate on n cannot tell the first panel from the last.
+
+   * For the Right-side Rtrsm that argument is VACUOUS, and saying otherwise misled the first
+     draft of this block. jb == 64 in every Right-side call without exception -- structurally,
+     not as a workload accident: the call sits inside `if (j + jb <= n)` and jb < nb only on
+     the last panel, so jb == nb == 64 whenever it runs (6807 of 6807 census calls). The work
+     expression m*n*n is therefore identically 4096*m, and MIN_POTRF_TRSM_WORK IS a minimum
+     row count however it is written. 131072 == m >= 32. Say "m >= 32" when explaining it.
+
+   Work convention, matching the Left gate above: the expression compared against these
+   constants is twice the true dd multiply-add count.
+     Rsyrk_omp        k*n*n   vs true  k*n*(n+1)/2       (in Rpotrf terms: (j-1)*jb*jb)
+     Rtrsm_omp Right  m*n*n   vs true  m*n*(n+1)/2       (in Rpotrf terms: (n-j-jb+1)*jb*jb)
+
+   RSYRK -- the break-even is below every shape this solver produces.
+   Speedup vs serial, thanos worst cell over four allocation offsets, k = 64 unless noted:
+
+       jb   gate work      thanos 2t/4t/8t        pi (crossing 1000-2000)
+        1          64      0.78 0.79 0.77   <- num_threads clamps to n: one thread, pure fork
+        2         256      0.97 0.96 0.95
+        3         576      1.44 1.24 1.24
+        4        1024      1.70 1.70 1.61   0.96 worst at 2t, 1.32-1.42 at 24t
+        6        2304      1.84 2.37 2.29   1.43 at 2t .. 1.93 at 4t, 1.68 at 24t
+        8        4096      1.90 2.84 3.08
+       18       20736      1.99 3.62 5.27
+       32       65536      2.01 3.85 7.06
+       40      102400      2.02 3.91 7.34
+       46 (k=128) 270848   2.02 3.97 7.76
+
+   thanos crosses between jb = 2 and 3 at k = 64 and below jb = 2 at k = 1024; pi crosses at
+   gate work 1000-2000. 2000 is the conservative end of that: on pi every shape at or above
+   2048 wins by >= 1.30x at every thread count, and the largest shape below it (1024) is
+   0.96x worst-case. It admits 100% of the census (the smallest census shape is 2304,
+   control7's jb = 6 k = 64, worth 1.43-2.41x). Its job is to guard shapes SDPLIB does not
+   contain, not to reject anything SDPLIB has.
+
+   RTRSM (Right) -- there IS a losing regime, and it is not fork/join.
+   Speedup vs serial, worst cell; m is the row count, jb = 64 fixed:
+
+       m      thanos 2t/4t/8t          pi
+        6     0.95  0.94  0.94         1.07 at 4t, 0.88 at 24t
+        8     1.10  0.87  0.84         1.55 at 4t, 0.93 at 8t
+       16     1.44  0.98  1.37         first pi size winning everywhere, >= 1.20x
+       18     1.53  0.97  1.44
+       22     1.62  1.69  1.75
+       26     1.72  1.36  1.98
+       32+    1.83+ 1.90+ 1.51+        rises to 5.9-6.7x at m ~ 1000
+   The m = 8 shape takes 167 us serially -- twenty fork/joins' worth -- and still loses at 8
+   threads, and a 250 us serial gap before every call (cold team) does not move the crossing
+   on pi. It is a memory/efficiency regime, not an overhead regime. Contributing causes,
+   both located: the row split (t*m)/nblk is not cache-line aligned (4 dd_real rows per 64 B
+   line, and the same shape reads 1.37x or 4.95x depending only on the address the allocator
+   returned), and the n(n+1)/2 = 2080 scalar zero-tests/temp loads of the (k,j) loops are
+   executed IN FULL by every thread, so that overhead grows with the team while the useful
+   work per thread shrinks. Both are fixable; see patches/b1_notes/ for the follow-up.
+
+   131072 (m >= 32) is the cross-machine conservative choice: thanos alone would take 131072,
+   pi alone 65536 (m >= 16); the larger of the two is the only setting under which no admitted
+   shape loses on either machine. It rejects census m in {6, 16, 18, 22, 26} -- 487 of 10482
+   Right-side calls (4.6%), carrying 0.12% of the panel arithmetic -- giving up two mild wins
+   (m = 22, 26) to remove three mild losses (m = 6, 8, 16/18 at 4t).
+
+   THREAD-COUNT SCALING. Flat over 2..24 is kept, but it is NOT uniformly confirmed and the
+   next person should know which half is which:
+     - Rsyrk: flat is measured. Near the crossing it is worst at 2 threads on BOTH machines
+       (more threads helps), so a flat gate is if anything conservative.
+     - Rtrsm Right: thanos CONTRADICTS flat -- its break-even moves from m ~ 4 at 2 threads to
+       m ~ 10-22 at 4 and 8, and m = 16/18 fall back to 0.97-0.98x at 4 threads after m = 10
+       had already crossed. pi found flat adequate over 2..24. The flat form is made safe here
+       by the CONSTANT, not by the form: m >= 32 sits above the worst break-even seen at any
+       measured thread count on either machine. If either constant is ever lowered towards its
+       break-even, this macro must be re-derived first.
+   Beyond 24 threads nothing is measured on either machine, so the threshold is grown linearly
+   there as a guard rather than extrapolated silently.
+
+   DO NOT reintroduce a thread-count-scaled guard on the WIDTH (the "n < 4*nthreads" shape).
+   With n = jb = 64 it rejects every panel at 24 threads, and at 24 threads those very shapes
+   measure 9.6-12.5x on pi. (On the m axis of the Rtrsm gate, 4*nt at 8 threads happens to
+   land on the same m >= 32 chosen here; that is a coincidence, and the constant above is
+   flat, not scaled.)
+
+   END TO END, whole-solver wall clock, ratio to a build whose panel gates always reject
+   (= pre-B1). thanos 8 threads on cores 0-7, idle box, min of 3, interleaved, warm-up
+   discarded, foreign-load-verified (2026-08-05); pi 8/24 threads, idle, min of 5:
+
+       problem     thanos 8t     pi 8t    pi 24t
+       theta2         2.07        1.90      2.20
+       qap9           2.24        1.77      2.16
+       theta3         2.41 [*]     --        --
+       truss5         1.36        1.43      1.34
+       control7       1.24        1.18      1.33
+       theta1         1.12        1.16      1.18
+       gpp124-1       1.10        1.04      1.13
+       arch0          1.09        1.08      1.17
+       hinf10         0.99-1.03   0.99      0.93   <- null control: order <= 21, never reaches
+                                                      the blocked path; this is its noise floor
+       [*] measured in the calibration leg (72.39 s -> 30.06 s), not in the verdict run.
+
+   Two warnings about that table. (1) The gate constant is NOT what pays: builds with gates
+   0 (always thread), 20000, and the values below agree to within 1-3% on every problem
+   above, on both machines. Quote the B1 improvement -- the gate-off column against any of
+   the others -- never a "gate improvement". The constants are justified by the KERNEL
+   measurement. (2) Any such figure taken on a machine that is not exclusively yours is
+   unproven: B1 adds ~2 OpenMP parallel regions per Cholesky panel (~1022 per theta2 solve),
+   each ending in a team barrier, so one preempted worker stalls the whole team at a cost the
+   serial baseline never pays. An earlier thanos run under a competing sweep read 0.68x on
+   theta2 where the idle box reads 2.07x, with the baseline's own time inflated 2.2x.
+
+   Finally, one number quoted above in MIN_GEMM_WORK's justification is wrong and should not
+   be reused: a dd multiply-add is 2.6-4.1 ns on pi, not the 25-50 ns claimed there. The
+   fork/join is ~2 us. Any "of order 1 ms of work" reasoning built on 25-50 ns is off by an
+   order of magnitude. */
+
+/* Rsyrk, Lower/NoTranspose: minimum work (k*jb*jb) to thread. Break-even is 256-1024 on
+   thanos and 1000-2000 on pi; this is the conservative end of pi's crossing. Admits every
+   panel shape SDPLIB produces. */
+#ifndef MPLAPACK_OMP_MIN_POTRF_SYRK_WORK
+#define MPLAPACK_OMP_MIN_POTRF_SYRK_WORK 2000.0
+#endif
+
+/* Rtrsm, Right/Lower/Transpose: minimum work (m*jb*jb) to thread. jb == 64 structurally, so
+   this is exactly "m >= 32 rows to share out". thanos wants 131072, pi 65536; the larger is
+   the only value under which no admitted shape loses on either machine. */
+#ifndef MPLAPACK_OMP_MIN_POTRF_TRSM_WORK
+#define MPLAPACK_OMP_MIN_POTRF_TRSM_WORK 131072.0
+#endif
+
+/* Flat across the measured range (2..24 threads); grown linearly past 24, where nothing has
+   been measured on either machine, so an unvalidated team size errs towards the serial
+   kernel. Flat is measured for Rsyrk and contradicted for Rtrsm Right on thanos between 2 and
+   4 threads -- see the "THREAD-COUNT SCALING" paragraph above before changing either
+   constant. */
+#ifndef MPLAPACK_OMP_POTRF_WORK
+#define MPLAPACK_OMP_POTRF_WORK(w, nt) ((nt) <= 24 ? (double)(w) : (double)(w) * (double)(nt) / 24.0)
+#endif
+
+/* Minimum number of iterations to share out, on whichever axis is being split: columns (n)
+   for Rsyrk_omp, ROWS (m) for Rtrsm_omp's Right case. Work alone is not sufficient -- the
+   last panel of a factorisation can have m as low as 1 and still carry real work. For Rsyrk
+   this floor is the ONLY thing that can reject jb = 1 (measured 0.77-0.79x, flat in thread
+   count, because num_threads is clamped to n and the "parallel" region runs on one thread):
+   no work gate can, since k is unbounded. It is a floor on the parallel axis only, and it is
+   NOT scaled by thread count, deliberately -- see the "n < 4*nthreads" note above. */
+#ifndef MPLAPACK_OMP_MIN_POTRF_WIDTH
+#define MPLAPACK_OMP_MIN_POTRF_WIDTH 2
 #endif
 
 #endif /* MPLAPACK_OMP_TUNING_H */

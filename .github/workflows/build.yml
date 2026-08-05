@@ -115,6 +115,25 @@ jobs:
           if diff -q t1.mutated t8.selected >/dev/null; then
             echo "FAIL: comparison cannot detect a changed matrix row" >&2; exit 1
           fi
+      - name: kernel accumulation-form invariant
+        # Rpotrf's lower path is bit-identical to its serial self only while three separate
+        # things hold, and every one of them fails SILENTLY: Rgemm_NT_omp must keep the
+        # "C += temp*A" accumulation form rather than netlib's TEMP-from-zero form (that kernel
+        # has already been edited once by this fork); Rsyrk_omp must split output columns and
+        # never the k reduction; and Rtrsm_omp must split its Right case over ROWS, not columns.
+        # tests/kernel_form_invariant.cpp pins all three, with a positive control on the first.
+        # It links the built mplapack objects directly -- no second compile of the kernels, so
+        # it cannot pass against a stale or differently-flagged copy of them.
+        run: |
+          set -euo pipefail
+          OMPFLAG=""
+          if [ "${{ matrix.openmp }}" = yes ]; then OMPFLAG="-fopenmp"; fi
+          ls mplapack/sdpa_dd-Rsyrk_omp.o mplapack/sdpa_dd-Rtrsm_omp.o >/dev/null \
+            || { echo "FAIL: the kernels under test were not built" >&2; exit 1; }
+          g++ -O2 $OMPFLAG -I mplapack -I external/i/QD/include \
+            -o kernel_form_invariant tests/kernel_form_invariant.cpp \
+            mplapack/sdpa_dd-*.o -L external/i/QD/lib -lqd -lm
+          OMP_NUM_THREADS=4 ./kernel_form_invariant
 # Job C -- -ftrivial-auto-var-init=zero vs =pattern must give identical output.
 # This is the method that found the iMlaenv block-size bug. ASan cannot see an
 # in-bounds uninitialised stack read; this can.
