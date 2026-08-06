@@ -140,10 +140,19 @@ dnl What the generated include/qd/qd_config.h must then look like. external/qd/M
 dnl checks this after the sub-configure runs: the FMA decision is invisible in the SDPA
 dnl build otherwise, and a QD built without it has already once been mistaken for one built
 dnl with it.
+dnl Three states, not two. When we pass --enable-fma=gnu or =no we know what QD will do
+dnl and the assertion is exact. But under --enable-qd-fma=auto on a NON-aarch64 host we
+dnl pass QD no argument at all, so QD runs its OWN probe -- and that probe can enable FMA
+dnl on PowerPC. Asserting "no" there would abort a legitimate build on a host we never
+dnl tested. "unknown" means the sub-build reports what it found without failing on it.
 if test x"$QD_FMA_ARG" = x"--enable-fma=gnu"; then
   QD_EXPECT_FMA=yes
-else
+elif test x"$QD_FMA_ARG" = x"--enable-fma=no"; then
   QD_EXPECT_FMA=no
+else
+  dnl QD_FMA_ARG is empty: QD decides. On x86-64 its probe yields "none", which is why
+  dnl the published x86-64 hashes are stable; on powerpc* it may yield FMA.
+  QD_EXPECT_FMA=unknown
 fi
 AC_SUBST([QD_EXPECT_FMA])
 

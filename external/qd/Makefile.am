@@ -76,8 +76,14 @@ work/$(CONFIGURE_STAMP): work/$(PATCH_STAMP) Makefile
 	@qdcfg=$(abs_builddir)/work/internal/qd-$(QDVERSION)/include/qd/qd_config.h; \
 	if grep -q '^#define QD_FMA(' $$qdcfg; then got=yes; else got=no; fi; \
 	echo "QD hardware FMA in $$qdcfg: $$got (expected $(QD_EXPECT_FMA))"; \
-	test "$$got" = "$(QD_EXPECT_FMA)" || \
-	  { echo "*** QD FMA is '$$got' but $(QD_FMA_ARG) asked for '$(QD_EXPECT_FMA)'" >&2; exit 1; }
+	if test "$(QD_EXPECT_FMA)" = unknown; then \
+	  echo "    (--enable-qd-fma=auto on a non-aarch64 host: QD ran its own probe, so this"; \
+	  echo "     is REPORTED, not asserted. QD's probe can enable FMA on powerpc*, and"; \
+	  echo "     aborting there would fail a legitimate build on an untested host.)"; \
+	else \
+	  test "$$got" = "$(QD_EXPECT_FMA)" || \
+	    { echo "*** QD FMA is '$$got' but $(QD_FMA_ARG) asked for '$(QD_EXPECT_FMA)'" >&2; exit 1; }; \
+	fi
 	touch $(abs_builddir)/work/$(CONFIGURE_STAMP)
 
 work/$(BUILD_STAMP): work/$(CONFIGURE_STAMP)
