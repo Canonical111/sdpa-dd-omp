@@ -58,6 +58,17 @@ class Solutions {
 
     dd_real xzMinEigenValue;
 
+    // 2026-08-06 (review1 blocker 3): update() returns FAILURE for two entirely
+    // different reasons and the caller could not tell them apart.
+    //   false -- the step length collapsed (alpha.primal and alpha.dual both
+    //            below 1.0e-4).  The iterate is still a valid interior point;
+    //            this is a legitimate stagnation stop and keeps exit status 0.
+    //   true  -- computeInverse() failed, i.e. the Cholesky factorisation of the
+    //            NEW X or Z failed.  The iterate has left the positive definite
+    //            cone, so it is not a solution and must not be printed as one.
+    // Meaningless unless update() returned FAILURE.
+    bool notPositiveDefinite;
+
     Solutions();
     Solutions(int m, int SDP_nBlock, int *SDP_blockStruct, int SOCP_nBlock, int *SOCP_blockStruct, int LP_nBlock, dd_real lambda, ComputeTime &com);
     ~Solutions();

@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 ------------------------------------------------------------- */
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-03: fatal parameter-file error exits non-zero; solver status propagated to exit code. See git log. */
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-05: the residual is built once into currentRes; initRes keeps only the scalars the solve actually reads, so the second full copy is never allocated. See git log. */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-06: numerical solve failure is tracked, suppresses the solution section, is diagnosed on stderr and exits non-zero; exit-status policy documented in this file; fpu_fix_end() moved before the return. See git log. */
 
 #ifndef _MAIN_
 #define _MAIN_
@@ -42,7 +43,117 @@ extern "C" {
 
 namespace sdpa {
 
-bool pinpal(char *dataFile, char *initFile, char *outFile, char *paraFile, bool isInitFile, bool isInitSparse, bool isDataSparse, bool isParameter, Parameter::parameterType parameterType, FILE *Display) {
+#define SDPA_PROGRAM_NAME "sdpa_dd"
+
+// ---------------------------------------------------------------------------
+// EXIT-STATUS POLICY  (2026-08-06, review1 blocker 3)
+//
+// The exit status answers exactly one question:
+//
+//     "Did this run compute an answer at all?"
+//
+// It deliberately does NOT answer "is the answer optimal?", and -- this is the
+// part a first attempt at this fix got wrong -- it does NOT answer "did every
+// factorisation succeed?" either.
+//
+//   0  SDPA_EXIT_OK
+//        The solver completed at least one iteration and printed the iterate it
+//        ended on.  This covers every valid mathematical outcome, including the
+//        many that are not pdOPT:
+//          - primal and/or dual infeasibility detected   (pdINF, pINF_dFEAS, ...)
+//          - unboundedness detected                      (pUNBD, dUNBD)
+//          - the iteration limit was reached             (noINFO, pdFEAS, ...)
+//          - the "objValPrimal < objValDual" stopping criterion fired
+//          - the step length collapsed while the iterate was still a valid
+//            interior point ("Step length is too small." / "cannot move")
+//          - a factorisation failed AFTER real progress had been made
+//        Judge the quality of such an answer from phase.value, the two
+//        objectives and the gap.  Not from the exit status.
+//
+//        MEASURED, and this is why the policy is shaped this way.  Two tempting
+//        rules were tried against the ten-problem regression set at DD precision
+//        and the measurements killed both:
+//
+//        (a) "nonzero unless phase == pdOPT" -- ZERO of the ten problems reach
+//            pdOPT (noINFO x4, pFEAS x4, pdINF x2), yet control1 agrees with its
+//            dual objective to 17 digits and hinf1 reaches its published optimum
+//            to seven.  This rule fails all ten.
+//
+//        (b) "nonzero whenever a Cholesky factorisation failed" -- the literal
+//            reading of the review -- fails FOUR of the ten:
+//              control1  iteration 71, mu = 3.9e-28, objP = objD = 1.78e+01;
+//                        X/Z lost positive definiteness -- because it converged
+//              theta1    iteration 50, mu = 1.4e-30, objP = objD = 23.0, which
+//                        is the published SDPLIB optimum; same mechanism
+//              arch0     iteration 72, Schur complement singular at pivot 90
+//              qap5      iteration 21, Schur complement singular at pivot 86
+//            Driving an interior-point method to the limit of its arithmetic is
+//            precisely what makes X, Z and the Schur complement numerically
+//            singular.  A failed factorisation at the END of a solve is how this
+//            solver normally STOPS; it is not a sign that anything went wrong.
+//
+//   2  SDPA_EXIT_NUMERICAL_FAILURE
+//        A factorisation failed before a single iteration completed
+//        (pIteration == 0), or the supplied initial point was not positive
+//        definite.  Nothing derived from the problem was ever computed, and what
+//        upstream printed here was the untouched starting point -- xVec all
+//        zeros, xMat = zMat = lambdaStar*I, objValPrimal = -0.0 -- dressed in the
+//        normal solution format, with a phase, and exit 0.  That is the
+//        wrong-answer bug this policy exists to kill.  Here the solution section
+//        is SUPPRESSED, the output file carries "solveStatus = FAILURE", and the
+//        exit status is nonzero.
+//
+//   1  SDPA_EXIT_INPUT
+//        Unusable input or usage: unreadable file, malformed data, bad options.
+//        The pre-existing rError() / exit(EXIT_FAILURE) paths, unchanged here;
+//        named so that the whole policy is readable in one place.
+//
+//        2 and 1 are both nonzero, so a harness testing "rc != 0" is unaffected
+//        by the split; the split only lets a harness that cares tell "your file
+//        is broken" from "the arithmetic broke".
+//
+// INDEPENDENTLY of the exit status: whenever a factorisation fails, at ANY
+// iteration, a line naming the stage and the iteration is written to STDERR.
+// Before this change stderr was empty in every such run -- rMessage and rError
+// write to cout -- so a harness watching stderr could not see a numerical
+// breakdown at all.  stderr is now the channel for "something went numerically
+// wrong"; the exit status is the channel for "there is no answer here".  On the
+// ten-problem regression set this makes 4 of 10 valid problems emit a two-line
+// stderr warning.  Nothing is added to the output file or to stdout in that
+// case, so both stay byte-for-byte identical for valid input.
+// ---------------------------------------------------------------------------
+enum SolveResult { SDPA_EXIT_OK = 0, SDPA_EXIT_INPUT = 1, SDPA_EXIT_NUMERICAL_FAILURE = 2 };
+
+// Report a factorisation failure.
+//   fatal == true  -> nothing was computed: this REPLACES the solution section,
+//                     and the caller returns nonzero.
+//   fatal == false -> iterates were computed and are still printed exactly as
+//                     before, so warn on STDERR ONLY.  Nothing is written to the
+//                     output file or to stdout in this case: a valid run's
+//                     output must stay byte-for-byte what it was.
+// One function so the wording a harness greps for cannot drift between sites.
+static void reportSolveFailure(FILE *fpOut, const char *outFile, const char *reason, int iteration, bool fatal) {
+    fprintf(stderr, "%s: %s :: %s", SDPA_PROGRAM_NAME, fatal ? "SOLVE FAILED" : "WARNING", reason);
+    if (iteration >= 0) {
+        fprintf(stderr, " at iteration %d", iteration);
+    }
+    fprintf(stderr, "\n");
+    if (fatal == false) {
+        fprintf(stderr, "%s: the solver stopped here; %d iteration(s) were computed and the last iterate is reported as usual. Judge it from phase.value and the two objectives.\n", SDPA_PROGRAM_NAME, iteration);
+        return;
+    }
+    fprintf(stderr, "%s: no iteration completed, so no solution was computed; %s contains no solution section.\n", SDPA_PROGRAM_NAME, outFile ? outFile : "(no output file)");
+    if (fpOut) {
+        fprintf(fpOut, "\nsolveStatus = FAILURE\n");
+        fprintf(fpOut, "failureReason = %s\n", reason);
+        if (iteration >= 0) {
+            fprintf(fpOut, "failureIteration = %d\n", iteration);
+        }
+        fprintf(fpOut, "No solution is presented: no iteration completed, so the last iterate is the untouched initial point.\n");
+    }
+}
+
+int pinpal(char *dataFile, char *initFile, char *outFile, char *paraFile, bool isInitFile, bool isInitSparse, bool isDataSparse, bool isParameter, Parameter::parameterType parameterType, FILE *Display) {
 
     TimeStart(TOTAL_TIME_START1);
     TimeStart(FILE_READ_START1);
@@ -241,9 +352,19 @@ bool pinpal(char *dataFile, char *initFile, char *outFile, char *paraFile, bool 
         if ((fpInit = fopen(initFile, "r")) == NULL) {
             rError("Cannot open init file " << initFile);
         }
-        IO::read(fpInit, currentPt.xMat, currentPt.yVec, currentPt.zMat, isInitSparse);
+        IO::read(fpInit, currentPt.xMat, currentPt.yVec, currentPt.zMat, nBlock, blockStruct, blockType, blockNumber, isInitSparse);
         fclose(fpInit);
-        currentPt.computeInverse(work, com);
+        // This return value used to be discarded.  computeInverse() Cholesky-
+        // factorises the supplied X and Z; if either is not positive definite
+        // there is no invCholeskyX / invCholeskyZ, and every later step runs on
+        // whatever was left in those arrays.  Stop instead of solving on garbage.
+        // (No delete[] here for the same reason rError() has none: the process is
+        // about to exit, and the OS reclaims the arrays.)
+        if (currentPt.computeInverse(work, com) == false) {
+            reportSolveFailure(fpOut, outFile, "the initial point is not positive definite (Cholesky factorisation of X or Z failed)", -1, true);
+            fclose(fpOut);
+            return SDPA_EXIT_NUMERICAL_FAILURE;
+        }
 
         initPt_xMat.initialize(SDP_nBlock, SDP_blockStruct, SOCP_nBlock, SOCP_blockStruct, LP_nBlock);
 
@@ -311,6 +432,13 @@ bool pinpal(char *dataFile, char *initFile, char *outFile, char *paraFile, bool 
     Phase phase(initRes, solveInfo, param, currentPt.nDim);
 
     int pIteration = 0;
+
+    // Solve-failure state.  See the EXIT-STATUS POLICY at the top of this file.
+    // A NULL reason means "no failure": every break out of the main loop that
+    // leaves this NULL is a legitimate stopping condition and keeps exit 0.
+    const char *failureReason = NULL;
+    int failureIteration = -1;
+
     IO::printHeader(fpOut, Display);
     // -----------------------------------------------------
     // Here is MAINLOOP
@@ -335,6 +463,11 @@ bool pinpal(char *dataFile, char *initFile, char *outFile, char *paraFile, bool 
         bool isSuccessCholesky;
         isSuccessCholesky = newton.Mehrotra(Newton::PREDICTOR, inputData, currentPt, currentRes, mu, beta, reduction, phase, work, com);
         if (isSuccessCholesky == false) {
+            // Before this change this break was the ONLY reaction to a failed
+            // factorisation: the loop stopped, the last iterate was printed as a
+            // solution, and the process exited 0.
+            failureReason = "Cholesky factorisation of the Schur complement matrix failed in the Mehrotra predictor";
+            failureIteration = pIteration;
             break;
         }
         // rMessage("newton predictor = "); newton.display();
@@ -363,7 +496,19 @@ bool pinpal(char *dataFile, char *initFile, char *outFile, char *paraFile, bool 
             break;
         }
 #endif
-        newton.Mehrotra(Newton::CORRECTOR, inputData, currentPt, currentRes, mu, beta, reduction, phase, work, com);
+        // The corrector's return value used to be discarded here.  MEASURED, and
+        // this qualifies the review's claim that "Mehrotra's return value is not
+        // checked at all": Newton::compute_DyVec() factorises only for the
+        // PREDICTOR (sdpa_newton.cpp), so the CORRECTOR call cannot return false
+        // today and this check is provably behaviour-neutral.  That is precisely
+        // why it is both safe and necessary to add -- nothing but this line stops
+        // a future factorisation on the corrector path from being silently
+        // ignored the way the predictor's was.
+        if (newton.Mehrotra(Newton::CORRECTOR, inputData, currentPt, currentRes, mu, beta, reduction, phase, work, com) == false) {
+            failureReason = "Cholesky factorisation of the Schur complement matrix failed in the Mehrotra corrector";
+            failureIteration = pIteration;
+            break;
+        }
 
         // rMessage("currentPt = "); currentPt.display();
         // rMessage("newton corrector = "); newton.display();
@@ -379,12 +524,25 @@ bool pinpal(char *dataFile, char *initFile, char *outFile, char *paraFile, bool 
 
         IO::printOneIteration(pIteration, mu, theta, solveInfo, alpha, beta, fpOut, Display);
         if (currentPt.update(alpha, newton, work, com) == false) {
-            // if step length is too short,
-            // we finish algorithm
-            rMessage("cannot move");
-            //   memo by kazuhide nakata
-            //   StepLength::MehrotraCorrector
-            //   thetaMax*mu.initial -> thetamax*thetaMax*mu.initial
+            // update() fails for two different reasons and upstream treated both
+            // as "cannot move".  Solutions::notPositiveDefinite now separates
+            // them (see sdpa_dataset.h):
+            //   - step length collapsed: the iterate is still a valid interior
+            //     point, so this stays a legitimate stop with exit status 0 and
+            //     the same "cannot move" message as before.
+            //   - Cholesky of the new X or Z failed: the iterate has left the
+            //     positive definite cone and is not a solution.
+            if (currentPt.notPositiveDefinite) {
+                failureReason = "Cholesky factorisation failed on the updated X or Z: the iterate is no longer positive definite";
+                failureIteration = pIteration;
+            } else {
+                // if step length is too short,
+                // we finish algorithm
+                rMessage("cannot move");
+                //   memo by kazuhide nakata
+                //   StepLength::MehrotraCorrector
+                //   thetaMax*mu.initial -> thetamax*thetaMax*mu.initial
+            }
             break;
         }
 
@@ -415,11 +573,25 @@ bool pinpal(char *dataFile, char *initFile, char *outFile, char *paraFile, bool 
 #if REVERSE_PRIMAL_DUAL
     phase.reverse();
 #endif
+    // failureIteration == 0 means NO iteration completed, so currentPt still holds
+    // the untouched initial point (xVec zeros, xMat = zMat = lambdaStar*I) and
+    // printLastInfo() would dress it up as a solution.  That, and only that, is
+    // fatal.  A factorisation that failed after real iterations is how this solver
+    // normally terminates -- see the EXIT-STATUS POLICY at the top of this file --
+    // so its iterate is printed exactly as before and only stderr is told.
+    const bool fatalFailure = (failureReason != NULL && failureIteration == 0);
+    if (failureReason != NULL) {
+        reportSolveFailure(fpOut, outFile, failureReason, failureIteration, fatalFailure);
+    }
+    if (fatalFailure) {
+        // Deliberately no printLastInfo(): nothing was computed to print.
+    } else {
 #if 1
-    IO::printLastInfo(pIteration, mu, theta, solveInfo, alpha, beta, currentRes, phase, currentPt, com.TotalTime, nBlock, blockStruct, blockType, blockNumber, inputData, work, com, param, fpOut, Display);
+        IO::printLastInfo(pIteration, mu, theta, solveInfo, alpha, beta, currentRes, phase, currentPt, com.TotalTime, nBlock, blockStruct, blockType, blockNumber, inputData, work, com, param, fpOut, Display);
 #else
-    IO::printLastInfo(pIteration, mu, theta, solveInfo, alpha, beta, currentRes, phase, currentPt, com.TotalTime, inputData, work, com, param, fpOut, Display);
+        IO::printLastInfo(pIteration, mu, theta, solveInfo, alpha, beta, currentRes, phase, currentPt, com.TotalTime, inputData, work, com, param, fpOut, Display);
 #endif
+    }
     // com.display(fpOut);
 
     if (SDP_blockStruct) {
@@ -478,7 +650,7 @@ bool pinpal(char *dataFile, char *initFile, char *outFile, char *paraFile, bool 
   phase.~Phase();
 #endif
 
-    return true;
+    return fatalFailure ? SDPA_EXIT_NUMERICAL_FAILURE : SDPA_EXIT_OK;
 }
 
 static void message(char *argv0) {
@@ -697,7 +869,10 @@ int main(int argc, char **argv) {
             cout << "set       is STABLE_BUT_SLOW" << endl;
         }
     }
-    const bool solved = pinpal(dataFile, initFile, outFile, paraFile, isInitFile, isInitSparse, isDataSparse, isParameter, parameterType, Display);
-    return solved ? EXIT_SUCCESS : EXIT_FAILURE;
+    const int status = pinpal(dataFile, initFile, outFile, paraFile, isInitFile, isInitSparse, isDataSparse, isParameter, parameterType, Display);
+    // fpu_fix_end() used to sit AFTER the return and was therefore dead code: the
+    // extended-precision FPU mode that fpu_fix_start() installed was never undone.
+    // It has to run before the return, not after it.
     fpu_fix_end(&oldcw);
+    return status;
 }

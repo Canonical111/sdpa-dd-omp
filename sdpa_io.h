@@ -34,7 +34,11 @@ class IO {
     static void read(FILE *fpData, int &nBlock);
     static void read(FILE *fpData, int nBlock, int *blockStruct);
     static void read(FILE *fpData, Vector &b);
-    static void read(FILE *fpData, DenseLinearSpace &xMat, Vector &yVec, DenseLinearSpace &zMat, bool inputSparse);
+    // The block map (nBlock/blockStruct/blockType/blockNumber) is required: without
+    // it this reader cannot bound the block index, and it cannot translate an LP
+    // block plus local index into the flattened LP storage. It previously did
+    // neither -- see the comment on the sparse branch in sdpa_io.cpp.
+    static void read(FILE *fpData, DenseLinearSpace &xMat, Vector &yVec, DenseLinearSpace &zMat, int nBlock, int *blockStruct, int *blockType, int *blockNumber, bool inputSparse);
     static void read(FILE *fpData, int m, int SDP_nBlock, int *SDP_blockStruct, int SOCP_nBlock, int *SOCP_blockStruct, int LP_nBlock, int nBlock, int *blockStruct, int *blockType, int *blockNumber, InputData &inputData, bool isDataSparse);
 
     // 2008/02/27 kazuhide nakata

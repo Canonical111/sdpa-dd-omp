@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 ------------------------------------------------------------- */
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-03: WorkVariables DV2 init/terminate; InputData LP_nBlock init. See git log. */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-06: Solutions::update() records WHY it failed (step-length collapse vs. loss of positive definiteness) in Solutions::notPositiveDefinite. See git log. */
 
 #include <sdpa_dataset.h>
 #include <sdpa_parts.h>
@@ -27,6 +28,7 @@ namespace sdpa {
 
 Solutions::Solutions() {
     // Nothings needs.
+    notPositiveDefinite = false;
 }
 
 Solutions::~Solutions() { terminate(); }
@@ -133,12 +135,20 @@ bool Solutions::update(StepLength &alpha, Newton &newton, WorkVariables &work, C
     com.zMatTime += TimeCal(START1_2, END1_2);
 
     const dd_real cannot_move = 1.0e-4;
+    notPositiveDefinite = false;
     if (alpha.primal < cannot_move && alpha.dual < cannot_move) {
         rMessage("Step length is too small. ");
+        // Legitimate stagnation stop: X and Z are still positive definite, so the
+        // iterate the caller is holding is a real point. notPositiveDefinite
+        // stays false and the caller keeps exit status 0.
         return FAILURE;
     }
 
     total_judge = computeInverse(work, com);
+    if (total_judge == FAILURE) {
+        // The new X or Z is not positive definite. See sdpa_dataset.h.
+        notPositiveDefinite = true;
+    }
 
     return total_judge;
 }

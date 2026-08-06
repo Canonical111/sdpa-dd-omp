@@ -27,6 +27,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: initialise the SOCP_sp_* locals; they were passed to C.initialize() while never assigned. See git log. */
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-05: the decimal-token REWRITE is now guarded by the mantissa-digit count; validation is unchanged. See git log. */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-06: sparse records are read one LINE at a time and must carry exactly five fields; mDIM/nBLOCK/bLOCKsTRUCT are range-checked before they drive allocations; the sparse initial-point reader bounds the block index and maps an LP block through blockNumber[] as the data reader always did. Diagnostics carry the line number. See git log. */
 #include <sdpa_io.h>
 #include <vector>
 #include <algorithm>
@@ -180,12 +181,14 @@ bool normalizeDecimalToken(const std::string &token, size_t maxDigits, std::stri
     return true;
 }
 
-int readReal(FILE *fpData, dd_real &value) {
-    std::string token;
-    const int status = readNumericToken(fpData, token);
-    if (status == EOF) {
-        return EOF;
-    }
+// Outcome of converting one already-delimited token. Split out of readReal so the
+// line-bounded record reader below can convert a token it tokenised itself while
+// using the IDENTICAL high-precision path -- normalizeDecimalToken plus
+// dd_real::read -- and still attach its own line-numbered diagnostic. Nothing
+// about the conversion changed; only the reporting moved to the caller.
+enum ConvertStatus { CONVERT_OK = 0, CONVERT_MALFORMED = 1, CONVERT_OUT_OF_RANGE = 2 };
+
+ConvertStatus convertReal(const std::string &token, dd_real &value) {
     // Count the mantissa digits FIRST: one allocation-free pass over the token.
     // Only an overlong mantissa needs the rewritten literal, so on ordinary input
     // normalizeDecimalToken runs in validate-only mode and never builds a string.
@@ -196,17 +199,36 @@ int readReal(FILE *fpData, dd_real &value) {
     const bool needRewrite = mantissaDigits > QD_READER_MAX_MANTISSA_DIGITS;
     std::string normalized;
     if (!normalizeDecimalToken(token, DD_INPUT_SIGNIFICANT_DIGITS, needRewrite ? &normalized : NULL)) {
-        std::cerr << "invalid numeric token in SDPA input: '" << token.substr(0, 80)
-                  << (token.size() > 80 ? "..." : "") << "'" << std::endl;
-        std::exit(EXIT_FAILURE);
+        return CONVERT_MALFORMED;
     }
     // Preserve the original conversion path for ordinary inputs. Normalization
     // is needed only when QD's reader would overflow on an overlong mantissa.
     const char *parseToken = needRewrite ? normalized.c_str() : token.c_str();
     const int parseStatus = value.read(parseToken, value);
     if (parseStatus != 0 || !value.isfinite()) {
-        std::cerr << "SDPA input value is outside the DD range: '" << token.substr(0, 80)
-                  << (token.size() > 80 ? "..." : "") << "'" << std::endl;
+        return CONVERT_OUT_OF_RANGE;
+    }
+    return CONVERT_OK;
+}
+
+// Clip a token for a diagnostic so one corrupt line cannot print megabytes.
+std::string clipForMessage(const std::string &s) {
+    return s.size() > 80 ? s.substr(0, 80) + "..." : s;
+}
+
+int readReal(FILE *fpData, dd_real &value) {
+    std::string token;
+    const int status = readNumericToken(fpData, token);
+    if (status == EOF) {
+        return EOF;
+    }
+    const ConvertStatus converted = convertReal(token, value);
+    if (converted == CONVERT_MALFORMED) {
+        std::cerr << "invalid numeric token in SDPA input: '" << clipForMessage(token) << "'" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+    if (converted == CONVERT_OUT_OF_RANGE) {
+        std::cerr << "SDPA input value is outside the DD range: '" << clipForMessage(token) << "'" << std::endl;
         std::exit(EXIT_FAILURE);
     }
     return 1;
@@ -219,20 +241,6 @@ void requireReal(FILE *fpData, dd_real &value) {
     }
 }
 
-// A sparse record is five fields wide. Only the FIRST field may legitimately be
-// absent -- that is the end of the data. A record that stops after one to four
-// fields is truncated input and has to be diagnosed; treating it as ordinary loop
-// termination silently discards the rest of the file.
-void reportTruncatedRecord(const char *fileKind, const char *firstFieldName, int fieldsRead, int a, int b, int c, int d) {
-    const int value[4] = {a, b, c, d};
-    const char *name[4] = {firstFieldName, "block", "row", "column"};
-    fprintf(stderr, "%s: truncated record: expected 5 fields <%s> <block> <row> <column> <value>, found %d --", fileKind, firstFieldName, fieldsRead);
-    for (int t = 0; t < fieldsRead && t < 4; ++t) {
-        fprintf(stderr, " %s=%d", name[t], value[t]);
-    }
-    fprintf(stderr, "\n");
-}
-
 // Echo an offending header line without its terminator, so the diagnostic stays
 // on one line.
 void reportBadLine(const char *what, const char *line) {
@@ -242,6 +250,283 @@ void reportBadLine(const char *what, const char *line) {
     }
     fprintf(stderr, "%s: '%.*s'\n", what, static_cast<int>(len), line);
 }
+
+// ---------------------------------------------------------------------------
+// Line-bounded sparse record reader.
+//
+// The SDPA sparse record grammar is one record per line. SDPLIB/README.md,
+// "SDPA sparse format" -> "File Format", item 6:
+//
+//     6. The remaining lines of the file contain entries in the constraint
+//        matrices, with one entry per line.  The format for each line is
+//            <matno> <blkno> <i> <j> <entry>
+//
+// All 92 shipped SDPLIB problems obey it exactly: 3,285,833 record lines, zero
+// records spanning a line break and zero records carrying a sixth field.
+//
+// The previous reader obtained each of the five fields with a separate
+// whitespace-skipping conversion, so it could not see a line boundary at all. A
+// four-field record therefore took its fifth field from the FOLLOWING line and
+// every later field shifted by one. That alone would usually be caught by an
+// index range check -- but "%d" applied to a decimal value token such as "1.0"
+// consumes the "1" and leaves ".0" in the stream, so the borrowed field is
+// repaid out of the next value and the stream RE-SYNCHRONISES after exactly one
+// record. The file then reaches EOF cleanly, a different problem is solved, and
+// the run reports pdOPT with exit status 0. Deleting the row index from line 500
+// of SDPLIB's theta1.dat-s does precisely this: objValPrimal 22.9583 against a
+// published optimum of 23.0, exit 0, in all three forks.
+//
+// Reading a whole line and requiring exactly five fields on it closes that. The
+// added checks the old reader had (its EOF tests) only ever fired at end of
+// file, which is why the existing CI -- which truncates at EOF -- never saw it.
+// ---------------------------------------------------------------------------
+
+// A record line longer than this is refused instead of grown without bound. The
+// widest record any shipped problem produces is a few dozen bytes; the cap
+// exists only so that a corrupt file cannot drive an unbounded allocation.
+const size_t SDPA_MAX_RECORD_LINE = 1u << 20;
+
+// Field separators. Whitespace is the documented separator. ',', '{' and '}' are
+// also treated as separators because the reader being replaced skipped them
+// silently (its "%*[^0-9+-]" scanset consumed any non-numeric run), and this
+// reader must not reject an input the old one accepted.
+inline bool isFieldDelim(char c) {
+    return std::isspace(static_cast<unsigned char>(c)) != 0 || c == ',' || c == '{' || c == '}';
+}
+
+// Read one physical line. Returns false only at end of file with nothing read.
+// `overlong` reports that the line exceeded SDPA_MAX_RECORD_LINE; the excess is
+// dropped rather than buffered, so the caller can diagnose without the file
+// dictating the allocation.
+bool readPhysicalLine(FILE *fp, std::string &line, bool &overlong) {
+    line.clear();
+    overlong = false;
+    bool anything = false;
+    int c;
+    while ((c = fgetc(fp)) != EOF) {
+        anything = true;
+        if (c == '\n') {
+            return true;
+        }
+        if (line.size() < SDPA_MAX_RECORD_LINE) {
+            line.push_back(static_cast<char>(c));
+        } else {
+            overlong = true;
+        }
+    }
+    return anything;
+}
+
+// Number of complete lines before byte offset `position`. The record sections
+// start a few lines into the file (just after the c vector, or the y vector for
+// an initial point), so this pass is negligible beside reading the records --
+// and it is what lets a record diagnostic name a line of the FILE. Not one
+// diagnostic in these readers carried a line number before; every message quoted
+// field VALUES, which after a shift come from neighbouring lines and actively
+// misdirect.
+// Also reports, via `atLineStart`, whether `position` sits at the beginning of a
+// line. It usually does NOT: the data reader starts just after the last number of
+// the c vector and the initial-point reader just after the last number of the y
+// vector, both mid-line. The first "line" such a reader sees is the tail of that
+// header line, which is not a record and must not be validated as one -- the
+// reader being replaced skipped it, because "%*[^0-9+-]" consumed any non-numeric
+// run. Validating it would REJECT a valid file whose c vector is followed by
+// trailing text, which is a worse defect than the one being fixed.
+long linesBefore(FILE *fp, long position, bool *atLineStart) {
+    *atLineStart = true;
+    const long saved = ftell(fp);
+    if (saved < 0 || position < 0 || fseek(fp, 0, SEEK_SET) != 0) {
+        return 0;
+    }
+    long lines = 0;
+    long remaining = position;
+    char buf[8192];
+    char last = '\n';
+    while (remaining > 0) {
+        const long chunk = remaining < static_cast<long>(sizeof(buf)) ? remaining : static_cast<long>(sizeof(buf));
+        const size_t got = fread(buf, 1, static_cast<size_t>(chunk), fp);
+        if (got == 0) {
+            break;
+        }
+        for (size_t t = 0; t < got; ++t) {
+            if (buf[t] == '\n') {
+                ++lines;
+            }
+        }
+        last = buf[got - 1];
+        remaining -= static_cast<long>(got);
+    }
+    *atLineStart = (last == '\n');
+    fseek(fp, saved, SEEK_SET);
+    return lines;
+}
+
+// Strict decimal integer. The old reader used "%d", which accepts the leading
+// "1" of "1.0" and leaves ".0" behind -- the mechanism that let a truncated
+// record re-synchronise silently. Every one of the corpus's 3,285,833 record
+// lines carries a plain integer in fields 1-4, so nothing valid needs that
+// tolerance.
+bool parseFieldInt(const std::string &token, int &out) {
+    if (token.empty()) {
+        return false;
+    }
+    size_t pos = 0;
+    bool negative = false;
+    if (token[0] == '+' || token[0] == '-') {
+        negative = token[0] == '-';
+        pos = 1;
+    }
+    if (pos >= token.size()) {
+        return false;
+    }
+    long long acc = 0;
+    for (; pos < token.size(); ++pos) {
+        if (!std::isdigit(static_cast<unsigned char>(token[pos]))) {
+            return false;
+        }
+        acc = acc * 10 + (token[pos] - '0');
+        if (acc > 2147483648LL) { // beyond |INT_MIN|; stops before long long overflows
+            return false;
+        }
+    }
+    if (negative) {
+        acc = -acc;
+    }
+    if (acc > INT_MAX || acc < INT_MIN) {
+        return false;
+    }
+    out = static_cast<int>(acc);
+    return true;
+}
+
+// Reads sparse records one line at a time. `fileKind` and `firstFieldName` only
+// shape the diagnostics: the data file's first field is <matrix>, the initial
+// point file's is <target>.
+class SparseRecordReader {
+  public:
+    SparseRecordReader(FILE *fp, const char *fileKind, const char *firstFieldName, long position)
+        : fp_(fp), fileKind_(fileKind), firstFieldName_(firstFieldName), lineNo_(0), skipPartialLine_(false) {
+        bool atLineStart = true;
+        lineNo_ = linesBefore(fp, position, &atLineStart);
+        skipPartialLine_ = !atLineStart;
+    }
+
+    long lineNo() const { return lineNo_; }
+
+    // Reads the next record into the five outputs. Returns false at a clean end
+    // of data -- no further non-blank, non-comment line. Anything else that is
+    // not a well-formed five-field record is diagnosed with its line number and
+    // the process exits nonzero.
+    bool next(int &f1, int &f2, int &f3, int &f4, dd_real &value) {
+        static const char *fieldName[4] = {"", "block", "row", "column"};
+        while (true) {
+            bool overlong = false;
+            if (!readPhysicalLine(fp_, line_, overlong)) {
+                return false; // end of data
+            }
+            ++lineNo_;
+            if (skipPartialLine_) {
+                // the tail of the c-vector / y-vector line; not a record
+                skipPartialLine_ = false;
+                continue;
+            }
+            if (overlong) {
+                fprintf(stderr, "%s: line %ld: record line exceeds %lu bytes\n", fileKind_, lineNo_, static_cast<unsigned long>(SDPA_MAX_RECORD_LINE));
+                rError("io::read overlong record in input");
+            }
+
+            token_.clear();
+            std::string current;
+            for (size_t p = 0; p < line_.size(); ++p) {
+                if (isFieldDelim(line_[p])) {
+                    if (!current.empty()) {
+                        token_.push_back(current);
+                        current.clear();
+                    }
+                } else {
+                    current.push_back(line_[p]);
+                }
+            }
+            if (!current.empty()) {
+                token_.push_back(current);
+            }
+
+            if (token_.empty()) {
+                continue; // blank line
+            }
+            if (token_[0][0] == '*' || token_[0][0] == '"') {
+                continue; // comment line, same convention as the header
+            }
+
+            if (token_.size() != 5) {
+                fprintf(stderr,
+                        "%s: line %ld: expected 5 fields <%s> <block> <row> <column> <value> on one line, found %lu: '%s'\n",
+                        fileKind_, lineNo_, firstFieldName_, static_cast<unsigned long>(token_.size()), clipForMessage(line_).c_str());
+                rError("io::read malformed record in input");
+            }
+
+            int parsed[4];
+            for (int t = 0; t < 4; ++t) {
+                if (!parseFieldInt(token_[t], parsed[t])) {
+                    fprintf(stderr, "%s: line %ld: field %d <%s> is not an integer: '%s'\n",
+                            fileKind_, lineNo_, t + 1, t == 0 ? firstFieldName_ : fieldName[t], clipForMessage(token_[t]).c_str());
+                    rError("io::read malformed record in input");
+                }
+            }
+            const ConvertStatus converted = convertReal(token_[4], value);
+            if (converted == CONVERT_MALFORMED) {
+                fprintf(stderr, "%s: line %ld: field 5 <value> is not a number: '%s'\n", fileKind_, lineNo_, clipForMessage(token_[4]).c_str());
+                rError("io::read malformed record in input");
+            }
+            if (converted == CONVERT_OUT_OF_RANGE) {
+                fprintf(stderr, "%s: line %ld: field 5 <value> is outside the representable range: '%s'\n", fileKind_, lineNo_, clipForMessage(token_[4]).c_str());
+                rError("io::read malformed record in input");
+            }
+
+            f1 = parsed[0];
+            f2 = parsed[1];
+            f3 = parsed[2];
+            f4 = parsed[3];
+            return true;
+        }
+    }
+
+  private:
+    FILE *fp_;
+    const char *fileKind_;
+    const char *firstFieldName_;
+    long lineNo_;
+    bool skipPartialLine_;
+    std::string line_;
+    std::vector<std::string> token_;
+};
+
+// ---------------------------------------------------------------------------
+// Header range validation.
+//
+// mDIM and nBLOCK were conversion-checked but not range-checked, and they drive
+// allocations directly: "new int[nBlock]" with a negative nBlock terminates on
+// std::bad_array_new_length (exit 134), and "2000000000 = nBLOCK" in a 100-byte
+// file successfully reserved three 8 GB arrays before anything noticed.
+//
+// The upper bound is taken from the file itself rather than picked: the c vector
+// holds m numbers and bLOCKsTRUCT holds nBlock numbers, and no number occupies
+// less than one byte, so neither count can exceed the file's own length. That
+// rejects a fabricated dimension without capping a legitimately large problem.
+// ---------------------------------------------------------------------------
+long inputFileBound(FILE *fp) {
+    const long saved = ftell(fp);
+    if (saved < 0 || fseek(fp, 0, SEEK_END) != 0) {
+        return LONG_MAX; // not seekable: fall back to no file-derived bound
+    }
+    const long size = ftell(fp);
+    fseek(fp, saved, SEEK_SET);
+    return size < 0 ? LONG_MAX : size;
+}
+
+// A dense block of this order already needs 46340^2 = 2.1e9 entries, and one
+// more would overflow the int arithmetic used for block sizes throughout.
+const int SDPA_MAX_BLOCK_SIZE = 46340;
 
 } // namespace
 
@@ -350,6 +635,19 @@ void IO::read(FILE *fpData, FILE *fpout, int &m, char *str) {
                 reportBadLine("SDPA data file: the mDim record is not an integer", str);
                 rError("IO::read:: invalid mDim record in the SDPA header");
             }
+            // Range-check BEFORE m reaches initialize_bVec(m), new vector<int>[m+1]
+            // and new SparseLinearSpace[m].
+            if (m < 1) {
+                fprintf(stderr, "SDPA data file: mDIM must be at least 1, found %d\n", m);
+                rError("IO::read:: mDIM out of range in the SDPA header");
+            }
+            {
+                const long bound = inputFileBound(fpData);
+                if (static_cast<long>(m) > bound) {
+                    fprintf(stderr, "SDPA data file: mDIM = %d, but the whole file is only %ld bytes and cannot carry that many c-vector entries\n", m, bound);
+                    rError("IO::read:: mDIM out of range in the SDPA header");
+                }
+            }
             break;
         }
     }
@@ -360,12 +658,45 @@ void IO::read(FILE *fpData, int &nBlock) {
         fprintf(stderr, "SDPA data file: the nBlock record is missing or is not an integer\n");
         rError("IO::read:: invalid nBlock record in the SDPA header");
     }
+    // Range-check BEFORE nBlock reaches the three new int[nBlock] in main().
+    if (nBlock < 1) {
+        fprintf(stderr, "SDPA data file: nBLOCK must be at least 1, found %d\n", nBlock);
+        rError("IO::read:: nBLOCK out of range in the SDPA header");
+    }
+    const long bound = inputFileBound(fpData);
+    if (static_cast<long>(nBlock) > bound) {
+        fprintf(stderr, "SDPA data file: nBLOCK = %d, but the whole file is only %ld bytes and cannot carry that many bLOCKsTRUCT entries\n", nBlock, bound);
+        rError("IO::read:: nBLOCK out of range in the SDPA header");
+    }
 }
 
 void IO::read(FILE *fpData, int nBlock, int *blockStruct) {
+    // Every block size is validated as it is read, and the totals are accumulated
+    // in long long, so that main()'s own loop -- which negates a negative entry
+    // and sums the LP dimensions in int -- cannot be handed a value that
+    // overflows. A blockStruct entry of INT_MIN would make "-blockStruct[i]"
+    // undefined; a long run of large negative entries would wrap LP_nBlock.
+    long long totalLP = 0;
     for (int l = 0; l < nBlock; ++l) {
         if (fscanf(fpData, "%*[^0-9+-]%d", &blockStruct[l]) <= 0) {
             fprintf(stderr, "SDPA data file: bLOCKsTRUCT entry %d of %d is missing or is not an integer\n", l + 1, nBlock);
+            rError("IO::read:: invalid bLOCKsTRUCT record in the SDPA header");
+        }
+        if (blockStruct[l] == 0) {
+            fprintf(stderr, "SDPA data file: bLOCKsTRUCT entry %d of %d is 0; a block must have a nonzero size\n", l + 1, nBlock);
+            rError("IO::read:: invalid bLOCKsTRUCT record in the SDPA header");
+        }
+        if (blockStruct[l] > SDPA_MAX_BLOCK_SIZE || blockStruct[l] < -SDPA_MAX_BLOCK_SIZE) {
+            fprintf(stderr, "SDPA data file: bLOCKsTRUCT entry %d of %d is %d, outside the supported range [-%d,%d] (excluding 0)\n", l + 1, nBlock, blockStruct[l], SDPA_MAX_BLOCK_SIZE, SDPA_MAX_BLOCK_SIZE);
+            rError("IO::read:: invalid bLOCKsTRUCT record in the SDPA header");
+        }
+        if (blockStruct[l] < 0) {
+            totalLP += -static_cast<long long>(blockStruct[l]);
+        } else if (blockStruct[l] == 1) {
+            totalLP += 1;
+        }
+        if (totalLP > INT_MAX) {
+            fprintf(stderr, "SDPA data file: the total LP dimension exceeds %d by bLOCKsTRUCT entry %d of %d\n", INT_MAX, l + 1, nBlock);
             rError("IO::read:: invalid bLOCKsTRUCT record in the SDPA header");
         }
     }
@@ -377,7 +708,7 @@ void IO::read(FILE *fpData, Vector &b) {
     }
 }
 
-void IO::read(FILE *fpData, DenseLinearSpace &xMat, Vector &yVec, DenseLinearSpace &zMat, bool inputSparse) {
+void IO::read(FILE *fpData, DenseLinearSpace &xMat, Vector &yVec, DenseLinearSpace &zMat, int nBlock, int *blockStruct, int *blockType, int *blockNumber, bool inputSparse) {
     // read initial point
     int SDP_nBlock = xMat.SDP_nBlock;
     int SOCP_nBlock = xMat.SOCP_nBlock;
@@ -393,28 +724,31 @@ void IO::read(FILE *fpData, DenseLinearSpace &xMat, Vector &yVec, DenseLinearSpa
 
     if (inputSparse) {
         // sparse case , zMat , xMat in this order
+        //
+        // The block index l was previously checked only from below (l < 1) and
+        // was then DISCARDED: every block past the SDP and SOCP partitions was
+        // treated as LP and the element written to setElement_LP(i - 1). Two
+        // separate defects came out of that.
+        //
+        //  * l had no upper bound, so "2 999 1 1 5.9" was accepted, the run
+        //    exited 0 and printed a solution.
+        //  * Even a CORRECT l was ignored, so on a problem with two or more LP
+        //    blocks a well-formed initial point was written to the wrong
+        //    flattened slots -- block 3's local indices 1,2 overwrote block 2's
+        //    slots 0,1 and block 2's own values never landed anywhere. Deleting
+        //    block 2's records from a correct initial point produced
+        //    byte-identical output to supplying them. That is a wrong-answer
+        //    defect on VALID input, not merely a missing bound.
+        //
+        // The data reader already had this right (blockNumber[l-1] + i - 1);
+        // this now mirrors it exactly, which also fixes the SDP branch for a
+        // problem whose blocks are not ordered SDP-first -- "l <= SDP_nBlock"
+        // silently mistook an SDP block for an LP one whenever an LP block came
+        // before it in bLOCKsTRUCT.
         int i, j, l, target;
         dd_real value;
-        while (true) {
-            if (fscanf(fpData, "%*[^0-9+-]%d", &target) <= 0) {
-                break; // no further record: this is the end of the data
-            }
-            if (fscanf(fpData, "%*[^0-9+-]%d", &l) <= 0) {
-                reportTruncatedRecord("SDPA initial point file", "target", 1, target, 0, 0, 0);
-                rError("io::read truncated record in initial point file");
-            }
-            if (fscanf(fpData, "%*[^0-9+-]%d", &i) <= 0) {
-                reportTruncatedRecord("SDPA initial point file", "target", 2, target, l, 0, 0);
-                rError("io::read truncated record in initial point file");
-            }
-            if (fscanf(fpData, "%*[^0-9+-]%d", &j) <= 0) {
-                reportTruncatedRecord("SDPA initial point file", "target", 3, target, l, i, 0);
-                rError("io::read truncated record in initial point file");
-            }
-            if (readReal(fpData, value) == EOF) {
-                reportTruncatedRecord("SDPA initial point file", "target", 4, target, l, i, j);
-                rError("io::read truncated record in initial point file");
-            }
+        SparseRecordReader record(fpData, "SDPA initial point file", "target", ftell(fpData));
+        while (record.next(target, l, i, j, value)) {
 #if 0
       rMessage("target = " << target
 	       << ": l " << l
@@ -424,46 +758,50 @@ void IO::read(FILE *fpData, DenseLinearSpace &xMat, Vector &yVec, DenseLinearSpa
 #endif
 
             if (target != 1 && target != 2) {
-                fprintf(stderr, "SDPA initial point file: target out of range [1,2] in record (target=%d, l=%d, i=%d, j=%d)\n", target, l, i, j);
+                fprintf(stderr, "SDPA initial point file: line %ld: target out of range [1,2] in record (target=%d, l=%d, i=%d, j=%d)\n", record.lineNo(), target, l, i, j);
                 rError("io::read invalid target in initial point file");
             }
-            if (l < 1) {
-                fprintf(stderr, "SDPA initial point file: block index out of range in record (target=%d, l=%d, i=%d, j=%d)\n", target, l, i, j);
+            if (l < 1 || l > nBlock) {
+                fprintf(stderr, "SDPA initial point file: line %ld: block index out of range [1,%d] in record (target=%d, l=%d, i=%d, j=%d)\n", record.lineNo(), nBlock, target, l, i, j);
                 rError("io::read invalid block index in initial point file");
             }
-            if (i < 1 || j < 1) {
-                fprintf(stderr, "SDPA initial point file: entry index out of range in record (target=%d, l=%d, i=%d, j=%d)\n", target, l, i, j);
-                rError("io::read invalid entry index in initial point file");
-            }
+            const int blockSize = blockStruct[l - 1];
 
-            if (l <= SDP_nBlock) {
+            if (blockType[l - 1] == 1) {
                 // SDP part
-                if (target == 1) {
-                    zMat.setElement_SDP(l - 1, i - 1, j - 1, value);
-                } else {
-                    xMat.setElement_SDP(l - 1, i - 1, j - 1, value);
+                if (i < 1 || i > blockSize || j < 1 || j > blockSize) {
+                    fprintf(stderr, "SDPA initial point file: line %ld: entry index out of range [1,%d] in record (target=%d, l=%d, i=%d, j=%d)\n", record.lineNo(), blockSize, target, l, i, j);
+                    rError("io::read invalid entry index in initial point file");
                 }
-            } else if (l <= SDP_nBlock + SOCP_nBlock) {
+                const int l2 = blockNumber[l - 1];
+                if (target == 1) {
+                    zMat.setElement_SDP(l2, i - 1, j - 1, value);
+                } else {
+                    xMat.setElement_SDP(l2, i - 1, j - 1, value);
+                }
+            } else if (blockType[l - 1] == 2) {
                 // SOCP part
                 rError("io:: current version does not support SOCP");
-                int ll = l - SDP_nBlock;
-                if (target == 1) {
-                    zMat.setElement_SOCP(ll - 1, i - 1, j - 1, value);
-                } else {
-                    xMat.setElement_SOCP(ll - 1, i - 1, j - 1, value);
-                }
-            } else {
+            } else if (blockType[l - 1] == 3) {
                 // LP part
                 if (i != j) {
+                    fprintf(stderr, "SDPA initial point file: line %ld: an LP block entry must be diagonal, but row != column in record (target=%d, l=%d, i=%d, j=%d)\n", record.lineNo(), target, l, i, j);
                     rError("io:: LP part  3rd elemtn != 4th elemnt");
                 }
-                if (target == 1) {
-                    zMat.setElement_LP(i - 1, value);
-                } else {
-                    xMat.setElement_LP(i - 1, value);
+                if (i < 1 || i > blockSize) {
+                    fprintf(stderr, "SDPA initial point file: line %ld: entry index out of range [1,%d] in record (target=%d, l=%d, i=%d, j=%d)\n", record.lineNo(), blockSize, target, l, i, j);
+                    rError("io::read invalid entry index in initial point file");
                 }
+                const int lp = blockNumber[l - 1] + i - 1;
+                if (target == 1) {
+                    zMat.setElement_LP(lp, value);
+                } else {
+                    xMat.setElement_LP(lp, value);
+                }
+            } else {
+                rError("io::read not valid blockType");
             }
-        } // end of 'while (true)'
+        } // end of 'while (record.next(...))'
     } else {
         // dense case , zMat , xMat in this order
         // for SDP
@@ -533,26 +871,8 @@ void IO::read(FILE *fpData, InputData &inputData, int m, int SDP_nBlock, int *SD
     if (isDataSparse) {
         int i, j, k, l;
         dd_real value;
-        while (true) {
-            if (fscanf(fpData, "%*[^0-9+-]%d", &k) <= 0) {
-                break; // no further record: this is the end of the data
-            }
-            if (fscanf(fpData, "%*[^0-9+-]%d", &l) <= 0) {
-                reportTruncatedRecord("SDPA sparse data file", "matrix", 1, k, 0, 0, 0);
-                rError("io::read truncated record in input data");
-            }
-            if (fscanf(fpData, "%*[^0-9+-]%d", &i) <= 0) {
-                reportTruncatedRecord("SDPA sparse data file", "matrix", 2, k, l, 0, 0);
-                rError("io::read truncated record in input data");
-            }
-            if (fscanf(fpData, "%*[^0-9+-]%d", &j) <= 0) {
-                reportTruncatedRecord("SDPA sparse data file", "matrix", 3, k, l, i, 0);
-                rError("io::read truncated record in input data");
-            }
-            if (readReal(fpData, value) == EOF) {
-                reportTruncatedRecord("SDPA sparse data file", "matrix", 4, k, l, i, j);
-                rError("io::read truncated record in input data");
-            }
+        SparseRecordReader record(fpData, "SDPA sparse data file", "matrix", position);
+        while (record.next(k, l, i, j, value)) {
 #if 0
       rMessage("input k:" << k <<
 	       " l:" << l <<
@@ -577,6 +897,7 @@ void IO::read(FILE *fpData, InputData &inputData, int m, int SDP_nBlock, int *SD
                 }
             } else if (blockType[l - 1] == 3) { // LP part
                 if (i != j) {
+                    fprintf(stderr, "SDPA sparse data file: line %ld: an LP block entry must be diagonal, but row != column in record (k=%d, l=%d, i=%d, j=%d)\n", record.lineNo(), k, l, i, j);
                     rError("io:: LP part  3rd elemtn != 4th elemnt");
                 }
                 if (k == 0) {
@@ -708,37 +1029,19 @@ void IO::setBlockStruct(FILE *fpData, InputData &inputData, int m, int SDP_nBloc
     if (isDataSparse) {
         int i, j, k, l;
         dd_real value;
-        while (true) {
-            if (fscanf(fpData, "%*[^0-9+-]%d", &k) <= 0) {
-                break; // no further record: this is the end of the data
-            }
-            if (fscanf(fpData, "%*[^0-9+-]%d", &l) <= 0) {
-                reportTruncatedRecord("SDPA sparse data file", "matrix", 1, k, 0, 0, 0);
-                rError("io::read truncated record in input data");
-            }
-            if (fscanf(fpData, "%*[^0-9+-]%d", &i) <= 0) {
-                reportTruncatedRecord("SDPA sparse data file", "matrix", 2, k, l, 0, 0);
-                rError("io::read truncated record in input data");
-            }
-            if (fscanf(fpData, "%*[^0-9+-]%d", &j) <= 0) {
-                reportTruncatedRecord("SDPA sparse data file", "matrix", 3, k, l, i, 0);
-                rError("io::read truncated record in input data");
-            }
-            if (readReal(fpData, value) == EOF) {
-                reportTruncatedRecord("SDPA sparse data file", "matrix", 4, k, l, i, j);
-                rError("io::read truncated record in input data");
-            }
+        SparseRecordReader record(fpData, "SDPA sparse data file", "matrix", position);
+        while (record.next(k, l, i, j, value)) {
 
             if (k < 0 || k > m) {
-                fprintf(stderr, "SDPA sparse data file: matrix index out of range [0,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", m, k, l, i, j);
+                fprintf(stderr, "SDPA sparse data file: line %ld: matrix index out of range [0,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", record.lineNo(), m, k, l, i, j);
                 rError("io::read invalid matrix index in input data");
             }
             if (l < 1 || l > nBlock) {
-                fprintf(stderr, "SDPA sparse data file: block index out of range [1,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", nBlock, k, l, i, j);
+                fprintf(stderr, "SDPA sparse data file: line %ld: block index out of range [1,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", record.lineNo(), nBlock, k, l, i, j);
                 rError("io::read invalid block index in input data");
             }
             if (i < 1 || i > blockStruct[l - 1] || j < 1 || j > blockStruct[l - 1]) {
-                fprintf(stderr, "SDPA sparse data file: entry index out of range [1,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", blockStruct[l - 1], k, l, i, j);
+                fprintf(stderr, "SDPA sparse data file: line %ld: entry index out of range [1,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", record.lineNo(), blockStruct[l - 1], k, l, i, j);
                 rError("io::read invalid entry index in input data");
             }
 
@@ -752,7 +1055,7 @@ void IO::setBlockStruct(FILE *fpData, InputData &inputData, int m, int SDP_nBloc
                 SOCP_index[k].push_back(l2);
             } else if (blockType[l - 1] == 3) { // LP part
                 if (i != j) {
-                    printf("invalid data file k:%d, l:%d, i:%d, j:%d, value:%lf\n", k, l, i, j, value.x[0]);
+                    fprintf(stderr, "SDPA sparse data file: line %ld: an LP block entry must be diagonal, but row != column in record (k=%d, l=%d, i=%d, j=%d)\n", record.lineNo(), k, l, i, j);
                     rError("IO::initializeLinearSpace");
                 }
                 int l2 = blockNumber[l - 1];
@@ -899,26 +1202,8 @@ void IO::setElement(FILE *fpData, InputData &inputData, int m, int SDP_nBlock, i
     if (isDataSparse) {
         int i, j, k, l;
         dd_real value;
-        while (true) {
-            if (fscanf(fpData, "%*[^0-9+-]%d", &k) <= 0) {
-                break; // no further record: this is the end of the data
-            }
-            if (fscanf(fpData, "%*[^0-9+-]%d", &l) <= 0) {
-                reportTruncatedRecord("SDPA sparse data file", "matrix", 1, k, 0, 0, 0);
-                rError("io::read truncated record in input data");
-            }
-            if (fscanf(fpData, "%*[^0-9+-]%d", &i) <= 0) {
-                reportTruncatedRecord("SDPA sparse data file", "matrix", 2, k, l, 0, 0);
-                rError("io::read truncated record in input data");
-            }
-            if (fscanf(fpData, "%*[^0-9+-]%d", &j) <= 0) {
-                reportTruncatedRecord("SDPA sparse data file", "matrix", 3, k, l, i, 0);
-                rError("io::read truncated record in input data");
-            }
-            if (readReal(fpData, value) == EOF) {
-                reportTruncatedRecord("SDPA sparse data file", "matrix", 4, k, l, i, j);
-                rError("io::read truncated record in input data");
-            }
+        SparseRecordReader record(fpData, "SDPA sparse data file", "matrix", position);
+        while (record.next(k, l, i, j, value)) {
 #if 0
       rMessage("input k:" << k <<
 	       " l:" << l <<
@@ -927,15 +1212,15 @@ void IO::setElement(FILE *fpData, InputData &inputData, int m, int SDP_nBlock, i
 #endif
 
             if (k < 0 || k > m) {
-                fprintf(stderr, "SDPA sparse data file: matrix index out of range [0,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", m, k, l, i, j);
+                fprintf(stderr, "SDPA sparse data file: line %ld: matrix index out of range [0,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", record.lineNo(), m, k, l, i, j);
                 rError("io::read invalid matrix index in input data");
             }
             if (l < 1 || l > nBlock) {
-                fprintf(stderr, "SDPA sparse data file: block index out of range [1,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", nBlock, k, l, i, j);
+                fprintf(stderr, "SDPA sparse data file: line %ld: block index out of range [1,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", record.lineNo(), nBlock, k, l, i, j);
                 rError("io::read invalid block index in input data");
             }
             if (i < 1 || i > blockStruct[l - 1] || j < 1 || j > blockStruct[l - 1]) {
-                fprintf(stderr, "SDPA sparse data file: entry index out of range [1,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", blockStruct[l - 1], k, l, i, j);
+                fprintf(stderr, "SDPA sparse data file: line %ld: entry index out of range [1,%d] in record (k=%d, l=%d, i=%d, j=%d)\n", record.lineNo(), blockStruct[l - 1], k, l, i, j);
                 rError("io::read invalid entry index in input data");
             }
 
@@ -956,6 +1241,7 @@ void IO::setElement(FILE *fpData, InputData &inputData, int m, int SDP_nBlock, i
                 }
             } else if (blockType[l - 1] == 3) { // LP part
                 if (i != j) {
+                    fprintf(stderr, "SDPA sparse data file: line %ld: an LP block entry must be diagonal, but row != column in record (k=%d, l=%d, i=%d, j=%d)\n", record.lineNo(), k, l, i, j);
                     rError("io:: LP part  3rd elemtn != 4th elemnt");
                 }
                 if (k == 0) {
