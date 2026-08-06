@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 ------------------------------------------------------------- */
 
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-07-31: Schur-complement (bMat) construction threaded. See git log. */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-05: the dense Schur complement bMat is built in its LOWER TRIANGLE ONLY; the strict upper half was accumulated every iteration and never read. See git log. */
 #include <sdpa_newton.h>
 #include <sdpa_parts.h>
 #include <vector>
@@ -1194,12 +1195,21 @@ void Newton::compute_bMat_dense_SDP(InputData &inputData, Solutions &currentPt, 
                         calF3(value, work1, work2, xMat, invzMat, Ai, Aj);
                         break;
                     } // end of switch
-                    if (i != j) {
-                        bMat.de_ele[i + m * j] += value;
-                        bMat.de_ele[j + m * i] += value;
-                    } else {
-                        bMat.de_ele[i + m * i] += value;
-                    }
+                    // Write the LOWER triangle only (row >= col).
+                    //
+                    // Every consumer of the dense bMat is Lower-only: Rpotrf("Lower") in
+                    // Lal::choleskyFactorWithAdjust, and the two Rtrsv("Lower") in
+                    // Lal::solveSystems that the '/' operator dispatches to. The strict
+                    // upper half was therefore accumulated on every iteration and never
+                    // read. The one routine that would read it, Newton::permuteMat, has
+                    // no call sites -- see the note on its definition below.
+                    //
+                    // Disjointness across k1 is unchanged: the (inz, i) vs (jnz, j) test
+                    // above gives each unordered pair {i, j} exactly one owner, and this
+                    // writes a strict subset of what that owner wrote before.
+                    const int brow = (i > j) ? i : j;
+                    const int bcol = (i > j) ? j : i;
+                    bMat.de_ele[brow + m * bcol] += value;
                 } // end of 'for (int j)'
 
                 const double t = Time::rGetUseTime() - t_start1;
@@ -1394,12 +1404,10 @@ void Newton::compute_bMat_dense_LP(InputData &inputData, Solutions &currentPt, W
                 dd_real value;
                 value = xMat * invzMat * Ai * Aj;
 
-                if (i != j) {
-                    bMat.de_ele[i + m * j] += value;
-                    bMat.de_ele[j + m * i] += value;
-                } else {
-                    bMat.de_ele[i + m * i] += value;
-                }
+                // Lower triangle only -- see compute_bMat_dense_SDP above.
+                const int brow = (i > j) ? i : j;
+                const int bcol = (i > j) ? j : i;
+                bMat.de_ele[brow + m * bcol] += value;
             } // end of 'for (int j)'
         }     // end of 'for (int i)'
     }         // end of 'for (int l)'
@@ -1442,6 +1450,9 @@ void Newton::Make_bMat(InputData &inputData, Solutions &currentPt, WorkVariables
         //   compute_bMat_sparse_SOCP(inputData,currentPt,work,com);
         compute_bMat_sparse_LP(inputData, currentPt, work, com);
     } else {
+        // Keep this a FULL-matrix zero. Only the lower triangle is written below,
+        // but leaving the strict upper half uninitialised would put indeterminate
+        // values in a live allocation for no measurable gain.
         bMat.setZero();
         compute_bMat_dense_SDP(inputData, currentPt, work, com);
         //    compute_bMat_dense_SOCP(inputData,currentPt,work,com);
@@ -1455,6 +1466,13 @@ void Newton::Make_bMat(InputData &inputData, Solutions &currentPt, WorkVariables
 }
 
 // nakata 2004/12/01
+// WARNING: permuteMat is NOT CALLED anywhere in this tree. A whole-tree grep finds
+// only this definition and the declaration in sdpa_newton.h, and the method is not
+// virtual, so it cannot be reached indirectly either. It is also the only routine that
+// would read the dense bMat's strict UPPER triangle: it copies arbitrary (i, j) chosen
+// by ordering[]. Since 2026-08-05 the dense bMat is accumulated in its lower triangle
+// only, so the strict upper half holds whatever bMat.setZero() left there, i.e. zero.
+// A future caller must either mirror the lower half up first, or index with row >= col.
 void Newton::permuteMat(DenseMatrix &bMat, SparseMatrix &sparse_bMat) {
     int i, j, k;
     int mDIM = bMat.nRow;

@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 ------------------------------------------------------------- */
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-03: fatal errors exit non-zero. See git log. */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-05: Time:: uses a monotonic steady_clock. See git log. */
 /*--------------------------------------------------
   rsdpa_tool.h
   $Id: rsdpa_tool.h,v 1.2 2004/09/01 06:34:12 makoto Exp $
@@ -94,14 +95,29 @@ extern dd_real MMONE;
 
 class Time {
   public:
+    // Elapsed wall time, NOT process CPU time. times().tms_utime -- what upstream used --
+    // sums the CPU of every worker thread, so it grows with the thread count even when the
+    // run gets faster, and a real parallel speedup reads as a regression.
+    //
+    // 2026-08-05: system_clock -> steady_clock. system_clock is NOT monotonic: NTP slew or a
+    // step adjustment during a run is added to or subtracted from whatever interval spans it,
+    // and a backward step can make a phase report a negative time. Every use of this function
+    // is a difference of two calls (see the TimeStart/TimeEnd/TimeCal macros above), so a
+    // monotonic clock is what it wanted all along and the epoch is irrelevant. steady_clock is
+    // what the qd fork has used since its port. This changes reported timings only -- no value
+    // computed from it enters the solution, and regress.sh's hash excludes every timing line --
+    // but for a fork whose deliverable IS a benchmark matrix, the clock is part of the product.
     static double rGetUseTime() {
-        auto now = std::chrono::system_clock::now().time_since_epoch();
+        auto now = std::chrono::steady_clock::now().time_since_epoch();
         return std::chrono::duration<double>(now).count();
     }
 
-    static void rSetTimeVal(std::chrono::system_clock::time_point &targetVal) { targetVal = std::chrono::system_clock::now(); }
+    // Unused: the "count time with real time" arm of the macros above is behind #if 0, and it
+    // passes a `struct timeval`, which has never matched this signature. Kept in step with
+    // rGetUseTime rather than left on a different clock.
+    static void rSetTimeVal(std::chrono::steady_clock::time_point &targetVal) { targetVal = std::chrono::steady_clock::now(); }
 
-    static double rGetRealTime(const std::chrono::system_clock::time_point &start, const std::chrono::system_clock::time_point &end) {
+    static double rGetRealTime(const std::chrono::steady_clock::time_point &start, const std::chrono::steady_clock::time_point &end) {
         std::chrono::duration<double> elapsed_seconds = end - start;
         return elapsed_seconds.count();
     }

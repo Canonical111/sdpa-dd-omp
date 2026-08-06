@@ -14,16 +14,25 @@ jobs:
         run: autoreconf -fi
       - name: configure
         run: ./configure --enable-openmp=${{ matrix.openmp }}
-      - name: first make (expected to stop inside SPOOLES)
-        run: make -j"$(nproc)" || true
-      - name: SPOOLES CC fix (upstream ships CC=c99 via .POSIX)
+      # 2026-08-05: these two steps used to be `make || true` followed by a sed that
+      # uncommented CC inside SPOOLES's extracted Make.inc. The shipped patch left every CC
+      # assignment commented out, and SPOOLES's `.POSIX:` makes GNU make default CC to c99,
+      # which rejects -funroll-all-loops -- so `make` could never build this tree unaided and
+      # the only working recipe lived HERE, in CI, and in the install skill, in three
+      # divergent versions. It now lives in the tree: external/spooles/patches/patch-Make.inc
+      # carries the flags (including the -Wno-error= set GCC 14+ needs) and
+      # external/spooles/Makefile.am puts CC on the SPOOLES make line. A plain make must
+      # therefore work. If this step fails, that fix has regressed -- do not paper over it
+      # with a sed again, fix the patch.
+      - name: make -- the shipped recipe must build SPOOLES unaided
+        run: make -j"$(nproc)"
+      - name: SPOOLES really received the patched flags
         run: |
-          sed -i 's|^# CC = gcc|  CC = gcc|' external/spooles/work/internal/Make.inc
-          cd external/spooles/work/internal
-          find . -name '*.o' -delete && rm -f spooles.a
-          make global -f makefile
-          cp spooles.a ../../../i/SPOOLES/lib/libspooles.a
-      - run: make -j"$(nproc)"
+          L=external/spooles/work/spooles-build.log
+          [ -s "$L" ] || { echo "FAIL: no SPOOLES build log at $L" >&2; exit 1; }
+          grep -q -- '-funroll-all-loops'        "$L" || { echo "FAIL: patched CFLAGS absent from the SPOOLES compile lines" >&2; exit 1; }
+          grep -q -- '-Wno-error=int-conversion' "$L" || { echo "FAIL: GCC-14 rescue flags absent" >&2; exit 1; }
+          echo "$(grep -c -- '-Wno-error=int-conversion' "$L") SPOOLES compile lines carry the rescue flags"
       - name: OpenMP linkage matches the matrix
         run: |
           n=$(ldd sdpa_dd | grep -c gomp || true)
@@ -254,7 +263,14 @@ jobs:
             sed -i 's|^# CC = gcc|  CC = gcc|' "$MK"
             # SPOOLES hardcodes its own CFLAGS; without this it links UNinstrumented
             # and ASan sees only allocator-level errors inside it.
-            printf '\n  CFLAGS += %s\n' "$SAN" >> "$MK"
+            # `override` is REQUIRED, not decoration: since 2026-08-05 patch-Make.inc sets
+            # the SPOOLES flags with `override CFLAGS += ...` (so that a CFLAGS passed on the
+            # make line by this job and by auto-var-init cannot silently take the GCC-14
+            # -Wno-error= rescue flags away). Once a variable has been set by an override
+            # directive, a LATER ORDINARY `CFLAGS +=` in the same makefile is IGNORED --
+            # verified, not assumed -- so a plain += here would drop $SAN without a word and
+            # the instrumentation assertion below would be the only thing that noticed.
+            printf '\n  override CFLAGS += %s\n' "$SAN" >> "$MK"
             d=$(dirname "$MK")
             ( cd "$d" && find . -name '*.o' -delete && rm -f spooles.a && make global -f makefile \
               && { cp spooles.a ../../../i/SPOOLES/lib/libspooles.a 2>/dev/null || cp spooles.a ./libspooles.a; } )

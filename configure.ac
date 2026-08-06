@@ -159,8 +159,15 @@ case "$host" in
         ;;
 esac
 LIBS="$LIBS $pthread_lib"
+CFLAGS="$CFLAGS $pthread_cflags"
 CXXFLAGS="$CXXFLAGS $pthread_cflags"
 AC_SUBST(pthread_lib)
+dnl 2026-08-05: pthread_cflags was referenced by Makefile.am (sdpa_dd_CXXFLAGS) and by the
+dnl SPOOLES patch-Make.inc, but was never AC_SUBST'ed, so both expanded to nothing. Harmless
+dnl here -- CXXFLAGS is preserved by this fork and already carries the flag -- but the
+dnl SPOOLES sub-build reads neither, and external/spooles/Makefile.am now forwards this
+dnl variable on the SPOOLES make line, so it has to actually exist.
+AC_SUBST(pthread_cflags)
 
 CFLAGS="$CFLAGS -O2 -funroll-all-loops"
 CXXFLAGS="$CXXFLAGS -O2 -funroll-all-loops"

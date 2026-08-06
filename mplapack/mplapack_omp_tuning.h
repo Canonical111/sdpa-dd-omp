@@ -18,8 +18,30 @@
 /* Tuning knobs for the mplapack OpenMP kernels. Override at compile time with -D. */
 
 /* Minimum gemm work (m*n*k dd multiply-adds) before an OpenMP fork/join pays for itself.
-   A dd multiply-add is ~25-50 ns; a fork/join across 24 threads costs ~5-20 us. Requiring
-   ~1 ms of work keeps the overhead below a few percent. */
+
+   MEASURED CONSTANTS, and they are the ONLY ones anybody should extrapolate from:
+   a dd multiply-add is 2.6-4.1 ns (pi, i9-13900K), and a fork/join is ~2 us TOTAL -- total,
+   not per thread, and not growing usefully with the team size over 2..24. At those numbers
+   the 20000 below is 52-82 us of arithmetic, some 25-40x the fork/join.
+
+   CORRECTED 2026-08-05. Until this date these three lines read "a dd multiply-add is
+   ~25-50 ns; a fork/join across 24 threads costs ~5-20 us. Requiring ~1 ms of work keeps
+   the overhead below a few percent." Every one of those figures was written down without
+   being measured: the multiply-add was ~10x too slow, the fork/join several times too
+   expensive, and the "~1 ms of work" conclusion drawn from them does not follow from the
+   real ones. They were caught during the Rpotrf calibration and retracted at the bottom of
+   this file; the retraction sat 260 lines below the claim, which is long enough for the
+   claim to be re-used, so it is corrected here at the source.
+
+   TWO THINGS THAT ARE STILL NOT MEASURED, so that this comment does not repeat the mistake
+   it is fixing. (1) The constant 20000 is itself uncalibrated: unlike the triangular gates
+   and the Rpotrf panel gates further down, no kernel sweep has ever been run against it.
+   It is a plausible number, not a validated one. (2) Nothing here justifies making the gate
+   a function of the thread count. That has been proposed on the assumption that fork/join
+   costs ~7 us per thread -- which would be ~168 us at 24 threads, two orders of magnitude
+   above the ~2 us actually measured -- and the triangular and Rpotrf blocks below record
+   the measurements showing the break-even does not track team size at all. See them before
+   changing the shape of any gate in this file. */
 #ifndef MPLAPACK_OMP_MIN_GEMM_WORK
 #define MPLAPACK_OMP_MIN_GEMM_WORK 20000.0
 #endif
@@ -276,10 +298,13 @@
    serial baseline never pays. An earlier thanos run under a competing sweep read 0.68x on
    theta2 where the idle box reads 2.07x, with the baseline's own time inflated 2.2x.
 
-   Finally, one number quoted above in MIN_GEMM_WORK's justification is wrong and should not
-   be reused: a dd multiply-add is 2.6-4.1 ns on pi, not the 25-50 ns claimed there. The
-   fork/join is ~2 us. Any "of order 1 ms of work" reasoning built on 25-50 ns is off by an
-   order of magnitude. */
+   Finally, the numbers this calibration produced for the machine itself: a dd multiply-add
+   is 2.6-4.1 ns on pi, and a fork/join is ~2 us in total. They are repeated at the top of
+   this file, in MIN_GEMM_WORK's justification, because that is where they get extrapolated
+   from. That justification used to claim 25-50 ns and 5-20 us instead -- unmeasured, and
+   off by an order of magnitude in the multiply-add -- and this paragraph used to be the
+   only place saying so, 260 lines below the claim it was correcting. Corrected in place
+   2026-08-05; the wrong figures are recorded there so the history is not lost. */
 
 /* Rsyrk, Lower/NoTranspose: minimum work (k*jb*jb) to thread. Break-even is 256-1024 on
    thanos and 1000-2000 on pi; this is the conservative end of pi's crossing. Admits every

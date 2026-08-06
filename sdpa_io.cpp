@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 #define DIMACS_PRINT 0
 
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: initialise the SOCP_sp_* locals; they were passed to C.initialize() while never assigned. See git log. */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-05: the decimal-token REWRITE is now guarded by the mantissa-digit count; validation is unchanged. See git log. */
 #include <sdpa_io.h>
 #include <vector>
 #include <algorithm>
@@ -65,7 +66,17 @@ int readNumericToken(FILE *fpData, std::string &token) {
     return 1;
 }
 
-bool normalizeDecimalToken(const std::string &token, size_t maxDigits, std::string &normalized) {
+// Validate `token` as a decimal literal and, when `normalized` is non-NULL, rewrite it
+// into a form QD's own reader can consume (at most `maxDigits` significant digits,
+// explicit exponent).
+//
+// Passing NULL means VALIDATE ONLY. The grammar walk, the exponent-overflow check and
+// the point-offset overflow check all still run, so the caller's diagnostics do not
+// change; what is skipped is the per-token significant-digit string and the
+// std::ostringstream that formats the rewritten literal. That rewrite is needed only
+// for mantissas longer than QD's reader can handle, and this routine is called once
+// per numeric field in the input file.
+bool normalizeDecimalToken(const std::string &token, size_t maxDigits, std::string *normalized) {
     size_t pos = 0;
     bool negative = false;
     if (pos < token.size() && (token[pos] == '+' || token[pos] == '-')) {
@@ -73,10 +84,13 @@ bool normalizeDecimalToken(const std::string &token, size_t maxDigits, std::stri
         ++pos;
     }
 
+    // digits[] is only needed to BUILD the rewritten literal; digitCount and
+    // firstNonzero carry everything the validation path needs.
     std::string digits;
+    size_t digitCount = 0;
+    size_t firstNonzero = std::string::npos;
     size_t digitsBeforePoint = 0;
     bool sawPoint = false;
-    bool sawDigit = false;
     while (pos < token.size() && token[pos] != 'e' && token[pos] != 'E') {
         const char c = token[pos++];
         if (c == '.') {
@@ -85,8 +99,13 @@ bool normalizeDecimalToken(const std::string &token, size_t maxDigits, std::stri
             }
             sawPoint = true;
         } else if (std::isdigit(static_cast<unsigned char>(c))) {
-            digits.push_back(c);
-            sawDigit = true;
+            if (normalized != NULL) {
+                digits.push_back(c);
+            }
+            if (c != '0' && firstNonzero == std::string::npos) {
+                firstNonzero = digitCount;
+            }
+            ++digitCount;
             if (!sawPoint) {
                 ++digitsBeforePoint;
             }
@@ -94,7 +113,7 @@ bool normalizeDecimalToken(const std::string &token, size_t maxDigits, std::stri
             return false;
         }
     }
-    if (!sawDigit) {
+    if (digitCount == 0) {
         return false;
     }
 
@@ -125,9 +144,10 @@ bool normalizeDecimalToken(const std::string &token, size_t maxDigits, std::stri
         }
     }
 
-    const size_t firstNonzero = digits.find_first_not_of('0');
     if (firstNonzero == std::string::npos) {
-        normalized = "0";
+        if (normalized != NULL) {
+            *normalized = "0";
+        }
         return true;
     }
     if (digitsBeforePoint > static_cast<size_t>(LLONG_MAX) || firstNonzero > static_cast<size_t>(LLONG_MAX)) {
@@ -139,6 +159,11 @@ bool normalizeDecimalToken(const std::string &token, size_t maxDigits, std::stri
         return false;
     }
     const long long adjustedExponent = explicitExponent + pointOffset;
+    if (normalized == NULL) {
+        // Validate-only: every check above has run; the rewrite below is what the
+        // caller said it does not need.
+        return true;
+    }
 
     const size_t count = std::min(maxDigits, digits.size() - firstNonzero);
     const std::string significant = digits.substr(firstNonzero, count);
@@ -151,7 +176,7 @@ bool normalizeDecimalToken(const std::string &token, size_t maxDigits, std::stri
         converted << '.' << significant.substr(1);
     }
     converted << 'e' << adjustedExponent;
-    normalized = converted.str();
+    *normalized = converted.str();
     return true;
 }
 
@@ -161,19 +186,23 @@ int readReal(FILE *fpData, dd_real &value) {
     if (status == EOF) {
         return EOF;
     }
-    std::string normalized;
-    if (!normalizeDecimalToken(token, DD_INPUT_SIGNIFICANT_DIGITS, normalized)) {
-        std::cerr << "invalid numeric token in SDPA input: '" << token.substr(0, 80)
-                  << (token.size() > 80 ? "..." : "") << "'" << std::endl;
-        std::exit(EXIT_FAILURE);
-    }
+    // Count the mantissa digits FIRST: one allocation-free pass over the token.
+    // Only an overlong mantissa needs the rewritten literal, so on ordinary input
+    // normalizeDecimalToken runs in validate-only mode and never builds a string.
     size_t mantissaDigits = 0;
     for (size_t i = 0; i < token.size() && token[i] != 'e' && token[i] != 'E'; ++i) {
         mantissaDigits += std::isdigit(static_cast<unsigned char>(token[i])) ? 1 : 0;
     }
+    const bool needRewrite = mantissaDigits > QD_READER_MAX_MANTISSA_DIGITS;
+    std::string normalized;
+    if (!normalizeDecimalToken(token, DD_INPUT_SIGNIFICANT_DIGITS, needRewrite ? &normalized : NULL)) {
+        std::cerr << "invalid numeric token in SDPA input: '" << token.substr(0, 80)
+                  << (token.size() > 80 ? "..." : "") << "'" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
     // Preserve the original conversion path for ordinary inputs. Normalization
     // is needed only when QD's reader would overflow on an overlong mantissa.
-    const char *parseToken = mantissaDigits > QD_READER_MAX_MANTISSA_DIGITS ? normalized.c_str() : token.c_str();
+    const char *parseToken = needRewrite ? normalized.c_str() : token.c_str();
     const int parseStatus = value.read(parseToken, value);
     if (parseStatus != 0 || !value.isfinite()) {
         std::cerr << "SDPA input value is outside the DD range: '" << token.substr(0, 80)

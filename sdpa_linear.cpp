@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 ------------------------------------------------------------- */
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-03: fatal eigensolver failure exits non-zero; rdpotf2_ returns on all paths. See git log. */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-05: the sparse Schur Cholesky reports a non-positive pivot as FAILURE instead of silently zeroing it and returning success. See git log. */
 
 #include <sdpa_linear.h>
 #include <sdpa_dataset.h>
@@ -351,6 +352,28 @@ bool Lal::getCholesky(DenseMatrix &retMat, DenseMatrix &aMat) {
 // nakata 2004/12/01
 // modified 2008/05/20    "aMat.sp_ele[indexA1] = 0.0;"
 // aMat = L L^T
+//
+// 2026-08-05 ("C7"): report failure instead of silently patching a non-positive pivot.
+//
+// Upstream set a negative pivot to 0.0, kept going, and returned `true`
+// unconditionally, so a Schur complement that is not positive definite was reported
+// to the caller as a successful factorisation. The zeroed pivot then propagates: the
+// scaling loop below multiplies that whole column by 0.0, so the returned "L" is not
+// a factor of anything and the search direction computed from it is silently wrong.
+// A pivot of exactly 0.0 was worse still -- it fell into the `else` arm and computed
+// 1.0/sqrt(0.0) = +inf, which poisons the rest of the factorisation with inf/NaN.
+// Both cases are now a reported FAILURE, which is what the DENSE twin
+// choleskyFactorWithAdjust already does (`info > 0` -> rMessage + FAILURE, below),
+// and what the CALLER already expects: Newton::compute_DyVec does
+//     bool ret = Lal::getCholesky(sparse_bMat, diagonalIndex);
+//     if (ret == FAILURE) { return FAILURE; }
+// The plumbing was there; only this callee was incapable of ever using it.
+//
+// Numerically inert on any input whose Schur complement stays positive definite:
+// neither branch is reachable unless a pivot is <= 0, and this function's arithmetic
+// is otherwise untouched. Proven bit-identical with patches/regress.sh (10 problems,
+// including truss6, the only problem in a 93-problem census that reaches this
+// function at all).
 bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
     int nDIM = aMat.nRow;
     int indexA1, indexA2, indexB2;
@@ -365,13 +388,15 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
     for (i = 0; i < nDIM; ++i) {
         indexA1 = diagonalIndex[i];
         indexA2 = diagonalIndex[i + 1];
-        if (aMat.sp_ele[indexA1] < 0.0) {
-            //      printf("aMat(sparse) is not positive definite\n");
-            aMat.sp_ele[indexA1] = 0.0;
-        } else {
-            // inverse diagonal
-            aMat.sp_ele[indexA1] = 1.0 / sqrt(aMat.sp_ele[indexA1]);
+        if (!(aMat.sp_ele[indexA1] > 0.0)) {
+            // Non-positive (or NaN) pivot: the Schur complement is not positive
+            // definite, so there is no Cholesky factor to return. Say so.
+            rMessage("sparse cholesky miss condition :: not positive definite"
+                     << " :: pivot " << i << " = " << aMat.sp_ele[indexA1]);
+            return FAILURE;
         }
+        // inverse diagonal
+        aMat.sp_ele[indexA1] = 1.0 / sqrt(aMat.sp_ele[indexA1]);
         for (k1 = indexA1 + 1; k1 < indexA2; ++k1) {
             aMat.sp_ele[k1] *= aMat.sp_ele[indexA1];
         }
@@ -392,7 +417,7 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
             }
         }
     }
-    return true;
+    return _SUCCESS;
 }
 
 bool Lal::getInvLowTriangularMatrix(DenseMatrix &retMat, DenseMatrix &aMat) {
