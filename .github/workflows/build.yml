@@ -70,13 +70,24 @@ jobs:
           fail() { echo "FAIL: $1" >&2; exit 1; }
           run_rc() { set +e; "$@" >/dev/null 2>&1; echo $?; set -e; }
           # negative entry index: used to write out of bounds and print a full solution
-          awk 'NR==5 {print "1 1 -3 -3 1.0"; next} {print}' example1.dat-s > neg-index.dat-s
+          # Line 5 is the b-vector ("48, -8, 20"); the FIRST SPARSE RECORD is line 6.
+          # Mutating line 5 made these cases fail for unrelated parse errors, so they were
+          # green while testing nothing they claim. Print the line so a future move is visible.
+          echo "fixture target line 6: $(sed -n 6p example1.dat-s)"
+          awk 'NR==6 {print "1 1 -3 -3 1.0"; next} {print}' example1.dat-s > neg-index.dat-s
           rc=$(run_rc ./sdpa_dd -ds neg-index.dat-s -o /tmp/neg.out -p param.sdpa)
           [ "$rc" -ne 0 ] || fail "negative index accepted (rc=0)"
           [ "$rc" -lt 128 ] || fail "negative index killed by signal (rc=$rc), not diagnosed"
+          ./sdpa_dd -ds neg-index.dat-s -o /tmp/neg.out -p param.sdpa 2>neg.err || true
+          grep -qiE 'out of range|index' neg.err \
+            || fail "negative index rejected, but not for the reason claimed: $(head -1 neg.err)"
+          # positive control: the SAME file unmutated must still solve, so a fixture that
+          # breaks the file some other way cannot masquerade as a bounds test.
+          rc=$(run_rc ./sdpa_dd -ds example1.dat-s -o /tmp/pc.out -p param.sdpa)
+          [ "$rc" -eq 0 ] || fail "positive control failed (rc=$rc): the fixture base file is broken"
           grep -q objValPrimal /tmp/neg.out 2>/dev/null && fail "negative index produced a solution"
           # block index out of range
-          awk 'NR==5 {print "1 99 1 1 1.0"; next} {print}' example1.dat-s > bad-block.dat-s
+          awk 'NR==6 {print "1 99 1 1 1.0"; next} {print}' example1.dat-s > bad-block.dat-s
           rc=$(run_rc ./sdpa_dd -ds bad-block.dat-s -o /tmp/bb.out -p param.sdpa)
           [ "$rc" -ne 0 ] || fail "out-of-range block index accepted (rc=0)"
           [ "$rc" -lt 128 ] || fail "bad block index killed by signal (rc=$rc), not diagnosed"
@@ -299,7 +310,11 @@ jobs:
           for p in SDPLIB/data/control1 SDPLIB/data/hinf1 SDPLIB/data/truss5 SDPLIB/data/truss6; do
             [ -f "$p.dat-s.xz" ] && xz -dkf "$p.dat-s.xz"
           done
-          awk 'NR==5 {print "1 1 -3 -3 1.0"; next} {print}' example1.dat-s > neg-index.dat-s
+          # Line 5 is the b-vector ("48, -8, 20"); the FIRST SPARSE RECORD is line 6.
+          # Mutating line 5 made these cases fail for unrelated parse errors, so they were
+          # green while testing nothing they claim. Print the line so a future move is visible.
+          echo "fixture target line 6: $(sed -n 6p example1.dat-s)"
+          awk 'NR==6 {print "1 1 -3 -3 1.0"; next} {print}' example1.dat-s > neg-index.dat-s
           printf '*comment only\n' > cmt.dat-s
           head -3 example1.dat-s > trunc.dat-s
           run() { echo "#### $1" >> san.log; shift; ( "$@" ) >> san.log 2>&1; echo "#### rc=$?" >> san.log; }
