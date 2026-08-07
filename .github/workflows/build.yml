@@ -326,7 +326,12 @@ jobs:
           awk 'NR==6 {print "1 1 -3 -3 1.0"; next} {print}' example1.dat-s > neg-index.dat-s
           printf '*comment only\n' > cmt.dat-s
           head -3 example1.dat-s > trunc.dat-s
-          run() { echo "#### $1" >> san.log; shift; ( "$@" ) >> san.log 2>&1; echo "#### rc=$?" >> san.log; }
+          # The step runs under `set -e`, and the malformed cases exit non-zero BY DESIGN
+          # -- more so since the fixtures were corrected to mutate the sparse record
+          # instead of the b-vector, which made them actually reject. Without `|| true`
+          # the helper aborts the whole step at the first malformed case, and the job
+          # fails with no sanitizer report and no diagnostic, which is what happened.
+          run() { echo "#### $1" >> san.log; shift; ( "$@" ) >> san.log 2>&1 || true; echo "#### rc=$?" >> san.log; }
           run example1     ./sdpa_dd -ds example1.dat-s -o /tmp/e1  -p param.sdpa
           for p in SDPLIB/data/control1 SDPLIB/data/hinf1 SDPLIB/data/truss5 SDPLIB/data/truss6; do
             [ -f "$p.dat-s" ] && run "$(basename $p)" ./sdpa_dd -ds "$p.dat-s" -o /tmp/o -p param.sdpa
