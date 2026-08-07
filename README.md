@@ -18,6 +18,14 @@ been adopted there; this fork exists so the fixes are usable.
 | 3 | thread the Schur-complement (`bMat`) constraint loop — the dominant gain |
 | 4 | report the reduced per-formula timers as worker-seconds, not elapsed time |
 
+The four patches above are the original port. The fork has since gained substantially more --
+a ten-item correctness batch (exit statuses, container ownership, input bounds, an
+uninitialised-read fix), record-bounded input parsing with line-numbered diagnostics, threaded
+Cholesky panel kernels and X/Z inverse-Cholesky triangulars behind measured work gates,
+hardware FMA for the bundled QD on aarch64, and the FP-contraction pin described below. Each
+change carries its evidence in its commit message; [BENCHMARKS.md](BENCHMARKS.md) holds the
+regenerated tables.
+
 Every modified file carries an in-file, dated change notice (GPLv2 §2a):
 `sdpa_newton.cpp`, `sdpa_parts.cpp`, `mplapack/Rgemm_{NN,NT,TN,TT}_omp.cpp`,
 `mplapack/{Rdot,Raxpy,Rcopy}_omp.cpp`; `mplapack/mplapack_omp_tuning.h` is new. `git log`
@@ -130,3 +138,19 @@ Serial builds (`--enable-openmp=no`) are supported and CI-checked.
 
 GPL v2, unchanged from upstream (`COPYING`). Copyright remains with the original
 SDPA authors; the patches in this fork are contributed under the same license.
+
+## Exit status
+
+Scripts that loop over problems can rely on the exit code:
+
+| outcome | exit |
+|---|---|
+| solver ran to any stopping condition (`pdOPT`, `pdFEAS`, `pFEAS`, `dFEAS`, `pdINF`, `pINF_dFEAS`, `pFEAS_dINF`, `pUNBD`, `dUNBD`, `noINFO`) | **0** |
+| iteration limit reached | **0** |
+| infeasibility / unboundedness detected | **0** |
+| malformed input, unreadable file, invalid parameter | **1** with a diagnostic (line-numbered for data files) |
+| numerical failure (e.g. the Schur Cholesky cannot be factorised) | **nonzero**, and no solution section is printed |
+
+Infeasibility and the iteration limit are valid mathematical results, not errors. Upstream
+exited 0 on *every* path -- including fatal errors -- so a crashed run was indistinguishable
+from a solved one in any harness that checks exit codes.

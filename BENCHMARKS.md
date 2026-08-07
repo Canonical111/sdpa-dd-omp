@@ -27,31 +27,35 @@ Median of 3 repeats, seconds (`wall_s`). Spread = (max-min)/median.
 
 | problem | m | v712 | upstream1 | upstream24 | upstream8P | optimized1 | optimized8P | optimized24 | optimized24arena1 |
 |---|---|---|---|---|---|---|---|---|---|
-| control1 | 21 | 0.010 | 0.010 | 0.170 ±24% | 0.070 ±29% | 0.010 | 0.010 | 0.010 | 0.010 |
+| control1 ‡ | 21 | 0.010 | 0.010 | 0.170 ±24% | 0.070 ±29% | 0.010 | 0.010 | 0.010 | 0.010 |
 | gpp100 | 101 | 0.720 | 0.830 | 0.320 ±3% | 0.290 ±3% | 0.750 | 0.260 | 0.240 | 0.240 |
 | control2 | 66 | 0.180 | 0.190 | 0.310 ±6% | 0.170 ±6% | 0.190 | 0.070 | 0.070 | 0.070 |
 | gpp124-1 | 125 | 1.380 ±1% | 1.590 | 0.490 | 0.480 | 1.430 ±1% | 0.470 | 0.430 ±2% | 0.430 |
-| theta1 | 104 | 0.140 | 0.230 | 0.240 ±4% | 0.170 ±6% | 0.180 | 0.120 | 0.120 | 0.120 |
-| mcp100 | 100 | 0.750 | 1.280 ±1% | 0.600 ±12% | 0.530 ±15% | 0.810 ±2% | 0.410 | 0.400 | 0.400 |
-| mcp124-1 | 124 | 1.060 | 2.130 | 1.090 ±34% | 0.950 ±46% | 1.150 ±1% | 0.590 ±3% | 0.590 ±2% | 0.590 |
-| truss5 | 208 | 0.850 | 0.800 | 2.680 ±13% | 1.510 ±28% | 0.790 | 0.470 | 0.490 | 0.490 |
-| arch0 | 174 | 10.220 | 13.050 | 7.370 ±4% | 7.280 ±5% | 9.950 | 2.690 ±1% | 2.470 ±1% | 2.450 |
+| theta1 ‡ | 104 | 0.140 | 0.230 | 0.240 ±4% | 0.170 ±6% | 0.180 | 0.120 | 0.120 | 0.120 |
+| mcp100 ‡ | 100 | 0.750 | 1.280 ±1% | 0.600 ±12% | 0.530 ±15% | 0.810 ±2% | 0.410 | 0.400 | 0.400 |
+| mcp124-1 ‡ | 124 | 1.060 | 2.130 | 1.090 ±34% | 0.950 ±46% | 1.150 ±1% | 0.590 ±3% | 0.590 ±2% | 0.590 |
+| truss5 ‡ | 208 | 0.850 | 0.800 | 2.680 ±13% | 1.510 ±28% | 0.790 | 0.470 | 0.490 | 0.490 |
+| arch0 ‡ | 174 | 10.220 | 13.050 | 7.370 ±4% | 7.280 ±5% | 9.950 | 2.690 ±1% | 2.470 ±1% | 2.450 |
 | arch2 | 174 | 11.300 | 14.450 | 8.780 | 8.690 | 11.460 | 2.880 ±6% | 2.550 | 2.550 |
-| arch4 | 174 | 11.290 | 14.650 | 8.860 ±3% | 8.790 ±6% | 11.620 | 2.900 | 2.570 | 2.570 |
+| arch4 ‡ | 174 | 11.290 | 14.650 | 8.860 ±3% | 8.790 ±6% | 11.620 | 2.900 | 2.570 | 2.570 |
 | arch8 | 174 | 10.490 | 13.440 | 8.140 ±2% | 8.070 | 10.640 | 2.660 ±1% | 2.350 | 2.350 |
-| control5 | 351 | 11.060 | 11.540 | 5.130 ±1% | 4.920 | 11.210 | 2.410 ±1% | 1.900 | 1.910 |
+| control5 ‡ | 351 | 11.060 | 11.540 | 5.130 ±1% | 4.920 | 11.210 | 2.410 ±1% | 1.900 | 1.910 |
 | control6 | 496 | 26.330 | 27.800 | 11.190 | 10.770 | 27.070 | 5.330 ±1% | 3.960 ±2% | 3.980 ±1% |
-| theta2 | 498 | 4.310 | 5.050 | 2.240 ±26% | 2.250 ±5% | 4.600 | 2.100 ±1% | 2.130 | 2.130 |
-| qap8 | 529 | 1.880 ±1% | 1.850 | 1.090 ±6% | 1.020 ±4% | 1.850 | 0.770 ±4% | 0.790 | 0.800 |
+| theta2 ‡ | 498 | 4.310 | 5.050 | 2.240 ±26% | 2.250 ±5% | 4.600 | 2.100 ±1% | 2.130 | 2.130 |
+| qap8 ‡ | 529 | 1.880 ±1% | 1.850 | 1.090 ±6% | 1.020 ±4% | 1.850 | 0.770 ±4% | 0.790 | 0.800 |
 | control7 | 666 | 57.310 | 60.310 | 21.720 | 22.200 | 58.780 | 10.900 ±1% | 7.770 | 7.830 ±3% |
 | qap9 | 748 | 4.600 | 4.730 | 2.190 ±5% | 2.270 ±11% | 4.720 | 1.660 | 1.640 ±1% | 1.650 ±1% |
-| theta3 | 1106 | 44.380 | 51.150 | 15.210 ±36% | 13.920 ±19% | 48.900 | 14.510 | 13.650 | 13.660 |
-| control8 | 861 | 111.310 | 118.680 | 38.910 ±2% | 41.550 ±2% | 116.010 | 20.700 | 14.660 ±2% | 14.460 ±2% |
+| theta3 ‡ | 1106 | 44.380 | 51.150 | 15.210 ±36% | 13.920 ±19% | 48.900 | 14.510 | 13.650 | 13.660 |
+| control8 ‡ | 861 | 111.310 | 118.680 | 38.910 ±2% | 41.550 ±2% | 116.010 | 20.700 | 14.660 ±2% | 14.460 ±2% |
 | **total** | | **309.6** | **343.8** | **136.7** | **135.9** | **322.1** | **71.9** | **58.8** | **58.7** |
 
-**optimized24 vs v712: 5.27x**  (totals 309.6 s -> 58.8 s)
+‡ = `v712` and `optimized24` take **different numbers of iterations** on this problem (control1 77 vs 71, theta1 43 vs 50, mcp100 53 vs 54, mcp124-1 49 vs 50, truss5 63 vs 62, arch0 75 vs 72, arch4 71 vs 72, control5 60 vs 59, theta2 54 vs 56, qap8 20 vs 19, theta3 63 vs 68, control8 60 vs 61). A ratio between those two cells measures path length as well as speed; the per-iteration figure below is the one to quote. Counts are listed under Integrity.
 
-Iteration counts differ on 12 problem(s) (control1, theta1, mcp100, mcp124-1, truss5, arch0, arch4, control5, theta2, qap8, theta3, control8), so the wall-time ratio above mixes speed with path length. **Per iteration: 5.13x** (5.319 s -> 1.036 s).
+**optimized24 vs v712, per iteration: 5.13x** (5.319 s -> 1.036 s per iteration, summed over the 20 of 20 problems with a determinate iteration count on both sides).
+Geometric mean of the per-problem per-iteration ratios, which weights a 0.03 s problem equally with a 120 s one: **3.10x**.
+
+End-to-end wall time totals 309.6 s -> 58.8 s (5.27x). **That ratio is not a speed statement**: the two builds disagree on iteration count on 12 of 20 problems (‡ above), so it mixes speed with path length.
+Restricted to the 8 problem(s) where both builds take the *same* number of iterations, wall time is like-for-like: 112.3 s -> 19.0 s = **5.91x** (gpp100, control2, gpp124-1, arch2, arch8, control6, control7, qap9).
 
 ### Integrity
 
@@ -136,7 +140,12 @@ Iteration counts differ on 12 problem(s) (control1, theta1, mcp100, mcp124-1, tr
 | control8 | 19.5 | 21.5 | 21.5 | 21.5 | 21.7 | 21.8 | 21.8 | 25.2 |
 
 
-## Mac — Apple M1 Max (8P+2E), macOS, Homebrew gcc-15
+## Mac — Apple M1 Max (8P+2E), macOS
+
+Reference columns (`v712`, `upstream1`, `upstream8`): Homebrew gcc-15, carried over unchanged.
+Fork columns (`optimized1`, `optimized8`): re-measured with Homebrew gcc 16.1.0 on the
+FP-contraction-pinned build. The compiler differs between the two halves of this table, so
+fork-vs-reference ratios here carry a compiler change as well as the fork's own changes.
 
 ## mac-m1max — dd — `wall_s`
 
@@ -144,31 +153,35 @@ Median of 3 repeats, seconds (`wall_s`). Spread = (max-min)/median.
 
 | problem | m | v712 | upstream1 | upstream8 | optimized1 | optimized8 |
 |---|---|---|---|---|---|---|
-| control1 | 21 | 0.040 ±25% | 0.050 ±40% | 0.820 ±49% | 0.040 ±25% | 0.040 |
-| gpp100 | 101 | 0.920 ±2% | 1.000 ±5% | 0.800 ±10% | 0.930 ±1% | 0.410 ±5% |
-| control2 | 66 | 0.220 ±5% | 0.220 | 0.810 ±11% | 0.210 | 0.110 ±9% |
-| gpp124-1 | 125 | 1.680 ±1% | 1.860 ±3% | 1.200 | 1.710 ±1% | 0.680 ±1% |
-| theta1 | 104 | 0.200 ±5% | 0.270 | 0.680 ±7% | 0.220 ±5% | 0.190 ±5% |
-| mcp100 | 100 | 1.010 ±1% | 1.930 ±1% | 1.570 ±8% | 1.330 ±1% | 0.850 ±8% |
-| mcp124-1 | 124 | 2.330 ±3% | 3.390 ±3% | 2.770 ±27% | 1.930 | 1.190 ±1% |
-| truss5 | 208 | 1.130 | 0.950 ±1% | 8.350 ±2% | 0.950 ±1% | 0.820 ±4% |
-| arch0 | 174 | 12.180 | 15.650 | 5.280 ±4% | 12.290 | 4.030 ±1% |
-| arch2 | 174 | 14.140 | 17.720 | 5.630 ±4% | 14.320 | 4.300 ±1% |
-| arch4 | 174 | 15.230 | 17.880 | 5.820 ±14% | 14.550 ±1% | 4.270 ±4% |
-| arch8 | 174 | 12.990 ±1% | 16.480 | 5.310 ±5% | 13.280 ±1% | 4.000 ±2% |
-| control5 | 351 | 12.070 ±1% | 12.670 ±1% | 4.060 ±1% | 12.290 ±1% | 2.920 ±4% |
-| control6 | 496 | 29.500 ±1% | 30.870 ±2% | 7.580 ±3% | 30.300 ±118% | 6.650 ±14% |
-| theta2 | 498 | 4.700 ±3% | 6.270 ±4% | 3.250 ±11% | 5.540 ±1% | 2.780 ±2% |
-| qap8 | 529 | 2.140 ±1% | 2.260 ±3% | 1.320 ±17% | 2.210 | 0.960 ±2% |
-| control7 | 666 | 62.820 ±1% | 65.790 ±2% | 13.740 ±1% | 64.490 ±2% | 11.950 ±7% |
-| qap9 | 748 | 5.700 ±2% | 5.570 | 2.600 ±10% | 5.560 ±1% | 1.970 ±1% |
-| theta3 | 1106 | 58.810 ±1% | 52.400 | 16.270 ±20% | 48.490 ±1% | 15.720 ±2% |
-| control8 | 861 | 122.180 ±1% | 128.870 | 24.510 ±6% | 124.820 ±1% | 22.140 |
-| **total** | | **360.0** | **382.1** | **112.4** | **355.5** | **86.0** |
+| control1 | 21 | 0.040 ±25% | 0.050 ±40% | 0.820 ±49% | 0.030 | 0.030 ±67% |
+| gpp100 | 101 | 0.920 ±2% | 1.000 ±5% | 0.800 ±10% | 0.580 ±3% | 0.220 ±18% |
+| control2 ‡ | 66 | 0.220 ±5% | 0.220 | 0.810 ±11% | 0.160 | 0.090 |
+| gpp124-1 | 125 | 1.680 ±1% | 1.860 ±3% | 1.200 | 1.070 ±5% | 0.360 ±19% |
+| theta1 ‡ | 104 | 0.200 ±5% | 0.270 | 0.680 ±7% | 0.160 ±6% | 0.140 ±14% |
+| mcp100 ‡ | 100 | 1.010 ±1% | 1.930 ±1% | 1.570 ±8% | 0.660 ±5% | 0.330 ±6% |
+| mcp124-1 ‡ | 124 | 2.330 ±3% | 3.390 ±3% | 2.770 ±27% | 0.870 ±1% | 0.400 ±2% |
+| truss5 ‡ | 208 | 1.130 | 0.950 ±1% | 8.350 ±2% | 0.650 ±5% | 0.570 ±9% |
+| arch0 | 174 | 12.180 | 15.650 | 5.280 ±4% | 9.060 ±2% | 2.080 ±3% |
+| arch2 | 174 | 14.140 | 17.720 | 5.630 ±4% | 10.870 ±1% | 2.310 ±4% |
+| arch4 ‡ | 174 | 15.230 | 17.880 | 5.820 ±14% | 10.910 ±1% | 2.280 ±1% |
+| arch8 ‡ | 174 | 12.990 ±1% | 16.480 | 5.310 ±5% | 9.910 | 2.060 ±1% |
+| control5 ‡ | 351 | 12.070 ±1% | 12.670 ±1% | 4.060 ±1% | 7.840 ±1% | 1.600 ±3% |
+| control6 | 496 | 29.500 ±1% | 30.870 ±2% | 7.580 ±3% | 19.260 ±1% | 3.760 ±11% |
+| theta2 ‡ | 498 | 4.700 ±3% | 6.270 ±4% | 3.250 ±11% | 3.300 ±1% | 1.050 ±7% |
+| qap8 | 529 | 2.140 ±1% | 2.260 ±3% | 1.320 ±17% | 1.460 ±1% | 0.410 ±12% |
+| control7 | 666 | 62.820 ±1% | 65.790 ±2% | 13.740 ±1% | 40.910 ±1% | 6.800 ±4% |
+| qap9 ‡ | 748 | 5.700 ±2% | 5.570 | 2.600 ±10% | 3.520 | 0.810 ±11% |
+| theta3 ‡ | 1106 | 58.810 ±1% | 52.400 | 16.270 ±20% | 33.040 ±1% | 6.720 ±29% |
+| control8 ‡ | 861 | 122.180 ±1% | 128.870 | 24.510 ±6% | 81.100 ±1% | 12.900 ±5% |
+| **total** | | **360.0** | **382.1** | **112.4** | **235.4** | **44.9** |
 
-**optimized8 vs v712: 4.19x**  (totals 360.0 s -> 86.0 s)
+‡ = `v712` and `optimized8` take **different numbers of iterations** on this problem (control2 61 vs 64, theta1 44 vs 50, mcp100 55 vs 54, mcp124-1 78 vs 50, truss5 59 vs 62, arch4 76 vs 72, arch8 65 vs 66, control5 60 vs 59, theta2 51 vs 56, qap9 20 vs 19, theta3 74 vs 68, control8 60 vs 61). A ratio between those two cells measures path length as well as speed; the per-iteration figure below is the one to quote. Counts are listed under Integrity.
 
-Iteration counts differ on 12 problem(s) (control1, control2, theta1, mcp100, mcp124-1, truss5, arch4, arch8, theta2, qap9, theta3, control8), so the wall-time ratio above mixes speed with path length. **Per iteration: 3.98x** (6.024 s -> 1.513 s).
+**optimized8 vs v712, per iteration: 7.78x** (6.024 s -> 0.774 s per iteration, summed over the 20 of 20 problems with a determinate iteration count on both sides).
+Geometric mean of the per-problem per-iteration ratios, which weights a 0.03 s problem equally with a 120 s one: **4.69x**.
+
+End-to-end wall time totals 360.0 s -> 44.9 s (8.01x). **That ratio is not a speed statement**: the two builds disagree on iteration count on 12 of 20 problems (‡ above), so it mixes speed with path length.
+Restricted to the 8 problem(s) where both builds take the *same* number of iterations, wall time is like-for-like: 123.4 s -> 16.0 s = **7.73x** (control1, gpp100, gpp124-1, arch0, arch2, control6, qap8, control7).
 
 ### Integrity
 
@@ -193,45 +206,79 @@ Iteration counts differ on 12 problem(s) (control1, control2, theta1, mcp100, mc
 - truss5/upstream8: iteration count VARIES across repeats (61/62)
 - control1: ITERATION COUNT differs BETWEEN configs (69, 71) -- compare per-iteration cost, not wall time
 - gpp100: objective differs BETWEEN configs: -4.4943074465425575e+01, -4.4943074465425589e+01
-- control2: ITERATION COUNT differs BETWEEN configs (59, 61) -- compare per-iteration cost, not wall time
-- theta1: ITERATION COUNT differs BETWEEN configs (44, 45) -- compare per-iteration cost, not wall time
-- mcp100: ITERATION COUNT differs BETWEEN configs (55, 66) -- compare per-iteration cost, not wall time
-- mcp124-1: ITERATION COUNT differs BETWEEN configs (62, 78) -- compare per-iteration cost, not wall time
-- truss5: ITERATION COUNT differs BETWEEN configs (59, 63) -- compare per-iteration cost, not wall time
+- control2: ITERATION COUNT differs BETWEEN configs (59, 61, 64) -- compare per-iteration cost, not wall time
+- gpp124-1: objective differs BETWEEN configs: -7.3429256740235607e+00, -7.3429256740235651e+00
+- theta1: ITERATION COUNT differs BETWEEN configs (44, 45, 50) -- compare per-iteration cost, not wall time
+- mcp100: ITERATION COUNT differs BETWEEN configs (54, 55, 66) -- compare per-iteration cost, not wall time
+- mcp124-1: ITERATION COUNT differs BETWEEN configs (50, 62, 78) -- compare per-iteration cost, not wall time
+- truss5: ITERATION COUNT differs BETWEEN configs (59, 62, 63) -- compare per-iteration cost, not wall time
 - arch4: ITERATION COUNT differs BETWEEN configs (72, 76) -- compare per-iteration cost, not wall time
 - arch8: ITERATION COUNT differs BETWEEN configs (65, 66) -- compare per-iteration cost, not wall time
-- theta2: ITERATION COUNT differs BETWEEN configs (51, 59) -- compare per-iteration cost, not wall time
-- qap8: objective differs BETWEEN configs: -7.5694293990998108e+02, -7.5694312382795681e+02
-- qap9: objective differs BETWEEN configs: -1.4099198799866915e+03, -1.4099345258838855e+03
+- control5: ITERATION COUNT differs BETWEEN configs (59, 60) -- compare per-iteration cost, not wall time
+- theta2: ITERATION COUNT differs BETWEEN configs (51, 56, 59) -- compare per-iteration cost, not wall time
+- qap8: objective differs BETWEEN configs: -7.5694293990998108e+02, -7.5694312382795681e+02, -7.5694312988433944e+02
+- qap9: objective differs BETWEEN configs: -1.4099198052029226e+03, -1.4099198799866915e+03, -1.4099345258838855e+03
 - qap9: ITERATION COUNT differs BETWEEN configs (19, 20) -- compare per-iteration cost, not wall time
-- theta3: ITERATION COUNT differs BETWEEN configs (62, 74) -- compare per-iteration cost, not wall time
+- theta3: ITERATION COUNT differs BETWEEN configs (62, 68, 74) -- compare per-iteration cost, not wall time
 - control8: ITERATION COUNT differs BETWEEN configs (60, 61) -- compare per-iteration cost, not wall time
 
 ### Peak RSS (MB, max over repeats)
 
 | problem | v712 | upstream1 | upstream8 | optimized1 | optimized8 |
 |---|---|---|---|---|---|
-| control1 | 8.5 | 8.5 | 8.5 | 8.5 | 8.5 |
-| gpp100 | 8.5 | 8.5 | 8.5 | 8.5 | 8.5 |
-| control2 | 8.5 | 8.5 | 8.5 | 8.5 | 8.5 |
-| gpp124-1 | 8.5 | 8.5 | 8.6 | 8.5 | 8.5 |
-| theta1 | 8.5 | 8.5 | 8.5 | 8.5 | 8.5 |
-| mcp100 | 8.5 | 8.5 | 8.5 | 8.5 | 8.5 |
-| mcp124-1 | 8.5 | 8.5 | 8.5 | 8.5 | 8.5 |
-| truss5 | 8.5 | 8.5 | 8.5 | 8.5 | 8.5 |
-| arch0 | 9.2 | 9.5 | 9.6 | 9.5 | 9.7 |
-| arch2 | 9.2 | 9.5 | 9.7 | 9.5 | 9.7 |
-| arch4 | 9.3 | 9.5 | 9.7 | 9.5 | 9.7 |
-| arch8 | 9.3 | 9.5 | 9.7 | 9.5 | 9.7 |
-| control5 | 8.5 | 8.5 | 8.7 | 8.5 | 8.8 |
-| control6 | 10.3 | 10.5 | 11.9 | 10.5 | 12.5 |
-| theta2 | 9.6 | 9.9 | 11.0 | 9.9 | 10.7 |
-| qap8 | 9.3 | 9.5 | 11.6 | 9.6 | 11.2 |
-| control7 | 15.4 | 15.7 | 17.4 | 15.7 | 17.4 |
-| qap9 | 14.2 | 14.5 | 16.8 | 14.5 | 16.6 |
-| theta3 | 27.7 | 27.9 | 30.1 | 27.9 | 30.1 |
-| control8 | 21.8 | 22.0 | 24.6 | 22.0 | 24.4 |
+| control1 | 8.5 | 8.5 | 8.5 | 8.4 | 8.4 |
+| gpp100 | 8.5 | 8.5 | 8.5 | 8.4 | 8.4 |
+| control2 | 8.5 | 8.5 | 8.5 | 8.4 | 8.4 |
+| gpp124-1 | 8.5 | 8.5 | 8.6 | 8.4 | 8.4 |
+| theta1 | 8.5 | 8.5 | 8.5 | 8.4 | 8.4 |
+| mcp100 | 8.5 | 8.5 | 8.5 | 8.4 | 8.4 |
+| mcp124-1 | 8.5 | 8.5 | 8.5 | 8.4 | 8.4 |
+| truss5 | 8.5 | 8.5 | 8.5 | 8.4 | 8.4 |
+| arch0 | 9.2 | 9.5 | 9.6 | 9.3 | 9.5 |
+| arch2 | 9.2 | 9.5 | 9.7 | 9.4 | 9.5 |
+| arch4 | 9.3 | 9.5 | 9.7 | 9.4 | 9.5 |
+| arch8 | 9.3 | 9.5 | 9.7 | 9.4 | 9.6 |
+| control5 | 8.5 | 8.5 | 8.7 | 8.4 | 8.6 |
+| control6 | 10.3 | 10.5 | 11.9 | 10.4 | 11.9 |
+| theta2 | 9.6 | 9.9 | 11.0 | 9.8 | 10.8 |
+| qap8 | 9.3 | 9.5 | 11.6 | 9.4 | 11.1 |
+| control7 | 15.4 | 15.7 | 17.4 | 15.6 | 17.5 |
+| qap9 | 14.2 | 14.5 | 16.8 | 14.3 | 16.7 |
+| theta3 | 27.7 | 27.9 | 30.1 | 27.8 | 30.0 |
+| control8 | 21.8 | 22.0 | 24.6 | 22.0 | 24.8 |
 
+
+### The fork columns pin floating-point contraction, and now match x86-64 exactly
+
+The two fork columns above (`optimized1`, `optimized8`) were re-measured; `v712`,
+`upstream1` and `upstream8` are carried over unchanged from the previously published Mac run,
+because re-building upstream with this fork's flags would change what "upstream" means in the
+comparison.
+
+This fork now compiles with `-ffp-contract=off` by default. On aarch64 the compiler was
+otherwise free to fuse `a*b+c` into a single FMA, which is *more* accurate per operation but
+breaks the two-sum/two-product identities double-double arithmetic is built on, so the solver
+took a different sequence of iterates on this machine than on x86-64. With contraction pinned,
+the M1 trajectory is **identical to x86-64 on 20 of 20 problems** —
+20/20 on iteration count and 20/20 on the objective,
+compared as decimal strings, not to a tolerance. Pinning moved the M1 iteration count on
+9 problems (`control1`, `control2`, `control5`, `mcp100`, `mcp124-1`, `theta1`, `theta2`, `theta3`, `truss5`) and the objective
+on 3 (`gpp124-1`, `qap8`, `qap9`); those moves are the
+M1 converging onto the x86-64 path, not away from it. Per-problem record:
+[`bench/b4_mac_rebaseline.tsv`](bench/b4_mac_rebaseline.tsv), whose `pinned_M1_iters` and
+`pinned_M1_obj` columns are re-checked against every benchmark row when this document is
+generated.
+
+Consequence for the table: the fork columns and the reference columns no longer walk the same
+path on the same problems, which is why the headline above is stated per iteration. The pin's
+own runtime cost is **not** separable from the compiler change in this table — both fork
+columns carry both — so no figure is quoted for it here.
+
+Termination phase is now recorded per run, which an iterations-and-objective table cannot
+show. Across both fork configurations and all three repeats it is constant per problem:
+**noINFO** on 12 (`arch0`, `arch2`, `arch4`, `arch8`, `control1`, `control2`, `control5`, `control6`, `control7`, `control8`, `qap8`, `qap9`); **pFEAS** on 6 (`mcp100`, `mcp124-1`, `theta1`, `theta2`, `theta3`, `truss5`); **pdINF** on 2 (`gpp100`, `gpp124-1`). `gpp100` (23 iterations) and `gpp124-1` (24 iterations) terminate in `pdINF` — primal-dual infeasible — and stop early; their wall times are correspondingly small and are not fast *solves*.
+
+Parameter file SHA-256 (16-hex prefix), identical on every re-measured row: `0abc064f632dd6ff`.
 
 ## thanos — AMD EPYC 7232P (8 physical cores), Ubuntu
 
@@ -245,31 +292,35 @@ Median of 3 repeats, seconds (`wall_s`). Spread = (max-min)/median.
 
 | problem | m | v712 | upstream1 | upstream8 | fork1 | fork8 |
 |---|---|---|---|---|---|---|
-| control1 | 21 | 0.110 ±9% | 0.120 | 0.180 ±39% | 0.100 ±10% | 0.110 |
+| control1 ‡ | 21 | 0.110 ±9% | 0.120 | 0.180 ±39% | 0.100 ±10% | 0.110 |
 | gpp100 | 101 | 2.620 ±13% | 3.190 | 1.220 ±25% | 2.860 | 1.240 ±2% |
 | control2 | 66 | 0.650 | 0.740 | 0.540 ±4% | 0.690 | 0.300 |
 | gpp124-1 | 125 | 5.060 | 6.130 | 1.760 ±31% | 5.470 | 2.260 ±1% |
-| theta1 | 104 | 0.510 | 0.840 | 0.590 ±8% | 0.640 | 0.450 |
-| mcp100 | 100 | 2.810 | 4.880 | 1.880 ±27% | 3.010 | 1.700 |
-| mcp124-1 | 124 | 4.410 | 8.170 | 3.850 ±33% | 4.260 | 2.420 |
-| truss5 | 208 | 3.110 | 2.880 | 3.520 ±15% | 2.820 | 1.760 ±7% |
+| theta1 ‡ | 104 | 0.510 | 0.840 | 0.590 ±8% | 0.640 | 0.450 |
+| mcp100 ‡ | 100 | 2.810 | 4.880 | 1.880 ±27% | 3.010 | 1.700 |
+| mcp124-1 ‡ | 124 | 4.410 | 8.170 | 3.850 ±33% | 4.260 | 2.420 |
+| truss5 ‡ | 208 | 3.110 | 2.880 | 3.520 ±15% | 2.820 | 1.760 ±7% |
 | arch0 | 174 | 36.560 | 50.410 | 30.770 ±1% | 38.070 | 10.690 ±3% |
 | arch2 | 174 | 42.500 | 56.040 | 36.180 | 43.950 | 11.310 ±4% |
-| arch4 | 174 | 42.450 | 56.780 | 36.720 ±2% | 44.510 | 11.370 ±5% |
+| arch4 ‡ | 174 | 42.450 | 56.780 | 36.720 ±2% | 44.510 | 11.370 ±5% |
 | arch8 | 174 | 39.510 | 52.070 | 33.560 | 40.830 | 10.530 ±5% |
-| control5 | 351 | 39.770 | 43.670 | 17.990 ±2% | 41.840 | 8.470 ±7% |
+| control5 ‡ | 351 | 39.770 | 43.670 | 17.990 ±2% | 41.840 | 8.470 ±7% |
 | control6 | 496 | 95.180 | 105.820 | 39.530 ±1% | 101.650 | 19.080 ±3% |
-| theta2 | 498 | 14.990 | 19.440 | 11.000 ±49% | 17.480 | 8.390 ±2% |
-| qap8 | 529 | 6.930 | 7.140 | 4.030 ±2% | 7.020 | 3.110 ±7% |
+| theta2 ‡ | 498 | 14.990 | 19.440 | 11.000 ±49% | 17.480 | 8.390 ±2% |
+| qap8 ‡ | 529 | 6.930 | 7.140 | 4.030 ±2% | 7.020 | 3.110 ±7% |
 | control7 | 666 | 208.020 | 230.790 | 83.440 | 222.140 | 40.160 ±1% |
-| qap9 | 748 | 19.760 | 18.540 | 9.290 ±14% | 18.240 | 7.560 ±2% |
-| theta3 | 1106 | 131.040 | 201.840 | 66.660 ±11% | 190.910 | 73.730 |
+| qap9 ‡ | 748 | 19.760 | 18.540 | 9.290 ±14% | 18.240 | 7.560 ±2% |
+| theta3 ‡ | 1106 | 131.040 | 201.840 | 66.660 ±11% | 190.910 | 73.730 |
 | control8 | 861 | 411.300 | 455.220 | 155.070 ±2% | 439.560 | 77.330 |
 | **total** | | **1107.3** | **1324.7** | **537.8** | **1226.0** | **292.0** |
 
-**fork8 vs v712: 3.79x**  (totals 1107.3 s -> 292.0 s)
+‡ = `v712` and `fork8` take **different numbers of iterations** on this problem (control1 77 vs 71, theta1 43 vs 50, mcp100 55 vs 54, mcp124-1 56 vs 50, truss5 63 vs 62, arch4 71 vs 72, control5 60 vs 59, theta2 51 vs 56, qap8 20 vs 19, qap9 22 vs 19, theta3 50 vs 68). A ratio between those two cells measures path length as well as speed; the per-iteration figure below is the one to quote. Counts are listed under Integrity.
 
-Iteration counts differ on 11 problem(s) (control1, theta1, mcp100, mcp124-1, truss5, arch4, control5, theta2, qap8, qap9, theta3), so the wall-time ratio above mixes speed with path length. **Per iteration: 3.82x** (19.475 s -> 5.096 s).
+**fork8 vs v712, per iteration: 3.82x** (19.475 s -> 5.096 s per iteration, summed over the 20 of 20 problems with a determinate iteration count on both sides).
+Geometric mean of the per-problem per-iteration ratios, which weights a 0.03 s problem equally with a 120 s one: **2.56x**.
+
+End-to-end wall time totals 1107.3 s -> 292.0 s (3.79x). **That ratio is not a speed statement**: the two builds disagree on iteration count on 11 of 20 problems (‡ above), so it mixes speed with path length.
+Restricted to the 9 problem(s) where both builds take the *same* number of iterations, wall time is like-for-like: 841.4 s -> 172.9 s = **4.87x** (gpp100, control2, gpp124-1, arch0, arch2, arch8, control6, control7, control8).
 
 ### Integrity
 
@@ -334,12 +385,15 @@ Iteration counts differ on 11 problem(s) (control1, theta1, mcp100, mcp124-1, tr
 
 
 Two figures against 7.1.2 appear above because mpack (7.1.2) and mplapack (master) round
-differently and take different iteration counts on 12 of 20 problems. Against upstream the
-right reading is: **serial** upstream and optimized trajectories match on 20/20 problems,
-but **threaded upstream is nondeterministic** (the integrity sections above flag every
-instance), so the headline vs-upstream ratios are observed end-to-end speedups rather than
-strictly same-trajectory comparisons. The optimized build's own trajectory is identical at
-every thread count.
+differently and take different iteration counts on 12 of 20 problems. Against
+upstream the right reading is: **serial** upstream and optimized trajectories match on
+20/20 problems on pi and 20/20 on thanos, but only
+11/20 on the Mac, where pinning FP contraction moved the fork onto the
+x86-64 trajectory and therefore *off* the trajectory this machine's own unpinned upstream
+takes (`control1`, `control2`, `control5`, `mcp100`, `mcp124-1`, `theta1`, `theta2`, `theta3`, `truss5`). And **threaded upstream is nondeterministic** (the integrity
+sections above flag every instance), so the headline vs-upstream ratios are observed
+end-to-end speedups rather than strictly same-trajectory comparisons. The optimized build's
+own trajectory is identical at every thread count on every machine here.
 
 ## Reproducibility evidence
 
@@ -357,6 +411,8 @@ configuration, including three problems whose *objective* differs run to run
 (`gpp100`, `gpp124-1`, `qap8`).
 
 Raw data: [`bench/pi_dd_v2.tsv`](bench/pi_dd_v2.tsv),
-[`bench/mac_dd_v2.tsv`](bench/mac_dd_v2.tsv),
+[`bench/mac_dd_v3.tsv`](bench/mac_dd_v3.tsv) (fork columns re-measured; reference columns
+carried over from [`bench/mac_dd_v2.tsv`](bench/mac_dd_v2.tsv), which is retained),
+[`bench/b4_mac_rebaseline.tsv`](bench/b4_mac_rebaseline.tsv),
 [`bench/dd_v2_thanos.tsv`](bench/dd_v2_thanos.tsv),
 [`bench/statehash_pi.tsv`](bench/statehash_pi.tsv).
