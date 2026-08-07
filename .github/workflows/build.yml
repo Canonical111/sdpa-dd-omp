@@ -292,8 +292,17 @@ jobs:
       - name: instrumentation actually reached the code under test
         run: |
           set -e
-          n=$(nm sdpa_io.o 2>/dev/null | grep -c __asan_report || true)
-          [ "${n:-0}" -ge 1 ] || { echo "FAIL: sdpa_io.o is not instrumented -- flags were dropped" >&2; exit 1; }
+          # automake emits PER-TARGET object names when the program carries its own
+          # CXXFLAGS, so the object is sdpa_dd-sdpa_io.o, not sdpa_io.o. Checking the bare
+          # name made `nm` fail on a nonexistent file, grep -c return 0, and this
+          # assertion fire whether or not instrumentation was applied -- it could never
+          # have passed. Locate the object, and assert it EXISTS before asking whether
+          # it is instrumented, so "absent" and "not instrumented" stay distinguishable.
+          obj=$(find . -name '*sdpa_io.o' -print -quit)
+          [ -n "$obj" ] || { echo "FAIL: no sdpa_io object found -- the build did not produce one" >&2; exit 1; }
+          echo "instrumentation check target: $obj"
+          n=$(nm "$obj" 2>/dev/null | grep -c __asan_report || true)
+          [ "${n:-0}" -ge 1 ] || { echo "FAIL: $obj is not instrumented -- flags were dropped" >&2; exit 1; }
           s=$(find . -name 'libspooles.a' -exec nm {} \; 2>/dev/null | grep -c __asan_report || true)
           [ "${s:-0}" -ge 1 ] || { echo "FAIL: SPOOLES is not instrumented" >&2; exit 1; }
 
