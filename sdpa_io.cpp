@@ -803,56 +803,55 @@ void IO::read(FILE *fpData, DenseLinearSpace &xMat, Vector &yVec, DenseLinearSpa
             }
         } // end of 'while (record.next(...))'
     } else {
-        // dense case , zMat , xMat in this order
-        // for SDP
-        for (int l = 0; l < SDP_nBlock; ++l) {
-            int size = zMat.SDP_block[l].nRow;
-            for (int i = 0; i < size; ++i) {
-                for (int j = 0; j < size; ++j) {
-                    dd_real tmp;
-                    requireReal(fpData, tmp);
-                    if (i <= j && tmp != 0.0) {
-                        zMat.setElement_SDP(l, i, j, tmp);
+        /* MODIFIED (review2 finding 2), 2026-08-08: dense case, zMat then xMat.
+           The file is written in the ORIGINAL bLOCKsTRUCT order, so a reader
+           that consumes every compacted SDP block first and the flattened LP
+           part afterwards mis-assigns every value once LP and SDP blocks are
+           interleaved: with block structure {-1, 2} the LP scalar was consumed
+           as the first SDP entry, and a mathematically valid positive definite
+           initial point was rejected with "initial point is not positive
+           definite" while its sparse spelling reached pdOPT. Iterate the
+           original blocks and dispatch on blockType, exactly as the sparse
+           branch does; blockNumber[] maps each original block to its compacted
+           SDP index or flat LP offset. A dense LP (diagonal) block of original
+           size s contributes s values, matching the sparse branch's diagonal
+           addressing lp = blockNumber[l] + i. */
+        for (int target = 1; target <= 2; ++target) {
+            for (int l = 0; l < nBlock; ++l) {
+                if (blockType[l] == 1) {
+                    const int b = blockNumber[l];
+                    int size = (target == 1 ? zMat : xMat).SDP_block[b].nRow;
+                    for (int i = 0; i < size; ++i) {
+                        for (int j = 0; j < size; ++j) {
+                            dd_real tmp;
+                            requireReal(fpData, tmp);
+                            if (i <= j && tmp != 0.0) {
+                                if (target == 1) {
+                                    zMat.setElement_SDP(b, i, j, tmp);
+                                } else {
+                                    xMat.setElement_SDP(b, i, j, tmp);
+                                }
+                            }
+                        }
                     }
-                }
-            }
-        }
-        // for SOCP
-        for (int l = 0; l < SOCP_nBlock; ++l) {
-            rError("io:: current version does not support SOCP");
-        }
-        // for LP
-        for (int j = 0; j < LP_nBlock; ++j) {
-            dd_real tmp;
-            requireReal(fpData, tmp);
-            if (tmp != 0.0) {
-                zMat.setElement_LP(j, tmp);
-            }
-        }
-
-        // for SDP
-        for (int l = 0; l < SDP_nBlock; ++l) {
-            int size = xMat.SDP_block[l].nRow;
-            for (int i = 0; i < size; ++i) {
-                for (int j = 0; j < size; ++j) {
-                    dd_real tmp;
-                    requireReal(fpData, tmp);
-                    if (i <= j && tmp != 0.0) {
-                        xMat.setElement_SDP(l, i, j, tmp);
+                } else if (blockType[l] == 2) {
+                    rError("io:: current version does not support SOCP");
+                } else if (blockType[l] == 3) {
+                    const int size = std::abs(blockStruct[l]);
+                    for (int i = 0; i < size; ++i) {
+                        dd_real tmp;
+                        requireReal(fpData, tmp);
+                        if (tmp != 0.0) {
+                            if (target == 1) {
+                                zMat.setElement_LP(blockNumber[l] + i, tmp);
+                            } else {
+                                xMat.setElement_LP(blockNumber[l] + i, tmp);
+                            }
+                        }
                     }
+                } else {
+                    rError("io::read not valid blockType");
                 }
-            }
-        }
-        // for SOCP
-        for (int l = 0; l < SOCP_nBlock; ++l) {
-            rError("io:: current version does not support SOCP");
-        }
-        // for LP
-        for (int j = 0; j < LP_nBlock; ++j) {
-            dd_real tmp;
-            requireReal(fpData, tmp);
-            if (tmp != 0.0) {
-                xMat.setElement_LP(j, tmp);
             }
         }
     } // end of 'if (inputSparse)'

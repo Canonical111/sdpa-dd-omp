@@ -101,6 +101,19 @@ jobs:
           rc=$(run_rc ./sdpa_dd -ds trunc.dat-s -o /tmp/tr.out -p param.sdpa)
           [ "$rc" -ne 0 ] || fail "truncated file returned 0"
           [ "$rc" -lt 128 ] || fail "truncated file killed by signal (rc=$rc), not diagnosed"
+
+      - name: interleaved LP/SDP initial point, dense vs sparse (review2 finding 2)
+        run: |
+          set -e
+          cd tests/initpoint_interleaved
+          ../../sdpa_dd -ds prob.dat-s -is init_sparse.ini-s -o /tmp/ip_s.out -p ../../param.sdpa > /dev/null
+          ../../sdpa_dd -ds prob.dat-s -id init_dense.ini   -o /tmp/ip_d.out -p ../../param.sdpa > /dev/null
+          grep -E 'Iteration|objValPrimal|objValDual|phase.value' /tmp/ip_s.out > /tmp/ip_s.sel
+          grep -E 'Iteration|objValPrimal|objValDual|phase.value' /tmp/ip_d.out > /tmp/ip_d.sel
+          test -s /tmp/ip_s.sel && test -s /tmp/ip_d.sel
+          diff /tmp/ip_s.sel /tmp/ip_d.sel \
+            || { echo "FAIL: dense and sparse spellings of the same initial point diverged" >&2; exit 1; }
+          echo "dense == sparse: $(cat /tmp/ip_s.sel | tr '\n' ' ')"
       - name: 1-thread and 8-thread results are identical (determinism guarantee)
         if: matrix.openmp == 'yes'
         run: |
