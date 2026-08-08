@@ -686,8 +686,14 @@ void IO::read(FILE *fpData, int nBlock, int *blockStruct) {
             fprintf(stderr, "SDPA data file: bLOCKsTRUCT entry %d of %d is 0; a block must have a nonzero size\n", l + 1, nBlock);
             rError("IO::read:: invalid bLOCKsTRUCT record in the SDPA header");
         }
-        if (blockStruct[l] > SDPA_MAX_BLOCK_SIZE || blockStruct[l] < -SDPA_MAX_BLOCK_SIZE) {
-            fprintf(stderr, "SDPA data file: bLOCKsTRUCT entry %d of %d is %d, outside the supported range [-%d,%d] (excluding 0)\n", l + 1, nBlock, blockStruct[l], SDPA_MAX_BLOCK_SIZE, SDPA_MAX_BLOCK_SIZE);
+        /* review2 dimension edge 1: the square-storage limit applies to SDP
+           blocks only -- an SDP block of order n needs n*n entries, so 46341
+           overflows int storage arithmetic. A NEGATIVE entry is a diagonal/LP
+           block with LINEAR storage, so a valid -50000 block was being rejected
+           for a constraint that does not apply to it; LP totals are bounded
+           separately by the totalLP > INT_MAX check below. */
+        if (blockStruct[l] > SDPA_MAX_BLOCK_SIZE) {
+            fprintf(stderr, "SDPA data file: bLOCKsTRUCT entry %d of %d is %d, above the supported SDP block order %d (square storage would overflow)\n", l + 1, nBlock, blockStruct[l], SDPA_MAX_BLOCK_SIZE);
             rError("IO::read:: invalid bLOCKsTRUCT record in the SDPA header");
         }
         if (blockStruct[l] < 0) {

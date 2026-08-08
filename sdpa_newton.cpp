@@ -26,6 +26,22 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 #include <vector>
 #ifdef _OPENMP
 #include <omp.h>
+
+#include <climits>
+#include <cstdlib>
+#include <iostream>
+
+// review2 dimension edge 2: m and SDP_nBlock are each bounded by the reader,
+// but their PRODUCT was formed in signed int at the allocation sites below.
+// Bounding the factors by file size does not prove the product fits.
+static int checkedProductInt(int a, int b, const char *what) {
+    const long long p = static_cast<long long>(a) * static_cast<long long>(b);
+    if (a < 0 || b < 0 || p > INT_MAX) {
+        std::cerr << "allocation size overflow: " << what << " = " << a << " * " << b << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+    return static_cast<int>(p);
+}
 #endif
 
 
@@ -113,7 +129,7 @@ void Newton::initialize(int m, int SDP_nBlock, int *SDP_blockStruct, int SOCP_nB
     x_rd_zinvMat.initialize(SDP_nBlock, SDP_blockStruct, SOCP_nBlock, SOCP_blockStruct, LP_nBlock);
 
     rNewCheck();
-    useFormula = new FormulaType[m * SDP_nBlock];
+    useFormula = new FormulaType[checkedProductInt(m, SDP_nBlock, "useFormula")];
     if (useFormula == NULL) {
         rError("Newton:: memory exhausted ");
     }
@@ -738,7 +754,7 @@ void Newton::computeFormula_SDP(InputData &inputData, dd_real DenseRatio, dd_rea
 
     int *upNonZeroCount;
     rNewCheck();
-    upNonZeroCount = new int[m * SDP_nBlock];
+    upNonZeroCount = new int[checkedProductInt(m, SDP_nBlock, "upNonZeroCount")];
     if (upNonZeroCount == NULL) {
         rError("Newton:: memory exhausted ");
     }
