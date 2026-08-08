@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 #include <vector>
 #ifdef _OPENMP
 #include <omp.h>
+#endif
 
 #include <climits>
 #include <cstdlib>
@@ -34,6 +35,8 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 // review2 dimension edge 2: m and SDP_nBlock are each bounded by the reader,
 // but their PRODUCT was formed in signed int at the allocation sites below.
 // Bounding the factors by file size does not prove the product fits.
+// Outside any _OPENMP guard: the call sites are unconditional, and a serial
+// or flag-overridden build (CI's sanitizer/warnings jobs) needs this too.
 static int checkedProductInt(int a, int b, const char *what) {
     const long long p = static_cast<long long>(a) * static_cast<long long>(b);
     if (a < 0 || b < 0 || p > INT_MAX) {
@@ -42,7 +45,6 @@ static int checkedProductInt(int a, int b, const char *what) {
     }
     return static_cast<int>(p);
 }
-#endif
 
 
 // ---------------------------------------------------------------------------
