@@ -128,18 +128,22 @@ jobs:
           diff /tmp/ip_s.sel /tmp/ip_d.sel \
             || { echo "FAIL: dense and sparse spellings of the same initial point diverged" >&2; exit 1; }
           echo "dense == sparse: $(cat /tmp/ip_s.sel | tr '\n' ' ')"
-      - name: corrupted-iterate failure is fatal and prints no solution (review2 finding 1)
+      - name: failed X/Z update rolls back to a PARTIAL result (review2 finding 1)
         run: |
           set -e
           # control1 driven past dd precision breaks the updated-X/Z Cholesky at
-          # iteration 71, deterministically. Before the fix this printed a full
-          # solution section and exited 0; bench_v2.sh recorded it as ok.
+          # iteration 71, deterministically. History of this exact case: upstream
+          # printed the CORRUPTED point and exited 0; the first fix suppressed
+          # everything (exit 2, no solution) -- which threw away a valid point,
+          # and at this fork's DEFAULT parameters real SDPLIB problems end here;
+          # the final policy rolls the step back and reports the last valid
+          # iterate as PARTIAL, exit 3.
           sed -E 's/^1.0E-30/1.0E-40/' param.sdpa > /tmp/hard.sdpa
           rc=0; ./sdpa_dd -ds tests/control1.dat-s -o /tmp/hard.out -p /tmp/hard.sdpa > /dev/null 2>/tmp/hard.err || rc=$?
-          [ "$rc" -eq 2 ] || { echo "FAIL: expected rc=2, got $rc" >&2; cat /tmp/hard.err >&2; exit 1; }
-          grep -q 'solveStatus = FAILURE' /tmp/hard.out || { echo "FAIL: no machine-readable failure status" >&2; exit 1; }
-          ! grep -q '^xVec' /tmp/hard.out || { echo "FAIL: a solution section was printed for a corrupted iterate" >&2; exit 1; }
-          grep -q 'failureIteration' /tmp/hard.out || { echo "FAIL: failureIteration missing" >&2; exit 1; }
+          [ "$rc" -eq 3 ] || { echo "FAIL: expected rc=3 (partial), got $rc" >&2; cat /tmp/hard.err >&2; exit 1; }
+          grep -q 'solveStatus = PARTIAL' /tmp/hard.out || { echo "FAIL: no machine-readable PARTIAL status" >&2; exit 1; }
+          grep -q '^xVec' /tmp/hard.out || { echo "FAIL: the rolled-back valid iterate was not printed" >&2; exit 1; }
+          grep -q 'failureIteration = 71' /tmp/hard.out || { echo "FAIL: failureIteration wrong or missing" >&2; exit 1; }
           # positive control: the same problem at the normal parameter file solves
           ./sdpa_dd -ds tests/control1.dat-s -o /tmp/ok.out -p param.sdpa > /dev/null
           grep -q '^xVec' /tmp/ok.out

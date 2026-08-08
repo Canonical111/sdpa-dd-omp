@@ -68,6 +68,13 @@ class Solutions {
     //            cone, so it is not a solution and must not be printed as one.
     // Meaningless unless update() returned FAILURE.
     bool notPositiveDefinite;
+    // 2026-08-08 (review2 finding 1, transactional option): when the updated X/Z
+    // fails to factor, update() SUBTRACTS THE STEP BACK and refactors. true here
+    // means that restore succeeded: the object again holds the last valid iterate
+    // (to within one add/sub rounding of each entry) and the caller should report
+    // a PARTIAL result rather than discarding the run. notPositiveDefinite stays
+    // true only if even the restore cannot be factored.
+    bool restoredToLastIterate;
 
     Solutions();
     Solutions(int m, int SDP_nBlock, int *SDP_blockStruct, int SOCP_nBlock, int *SOCP_blockStruct, int LP_nBlock, dd_real lambda, ComputeTime &com);

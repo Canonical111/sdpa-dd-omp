@@ -156,8 +156,8 @@ Scripts that loop over problems can rely on the exit code:
 | iteration limit reached | **0** |
 | infeasibility / unboundedness detected | **0** |
 | malformed input, unreadable file, invalid parameter | **1** with a diagnostic (line-numbered for data files) |
-| numerical failure with nothing valid to print -- no iteration completed, or the updated `X`/`Z` left the positive-definite cone (the in-memory iterate is invalid) | **2**, `solveStatus = FAILURE` in the result file, no solution section |
-| late Schur-complement factorisation failure after `k` good iterations -- the last **valid** iterate is printed and labelled | **3**, `solveStatus = PARTIAL`, `failureIteration = k` in the result file |
+| numerical failure with nothing valid to print -- no iteration completed, or the updated `X`/`Z` left the cone **and the rollback could not be refactored** | **2**, `solveStatus = FAILURE` in the result file, no solution section |
+| recoverable late failure after `k` good iterations -- a Schur factorisation failure, or an `X`/`Z` update that left the cone and was **rolled back**; the last valid iterate is printed and labelled | **3**, `solveStatus = PARTIAL`, `failureIteration = k` in the result file |
 
 Infeasibility and the iteration limit are valid mathematical results, not errors. Upstream
 exited 0 on *every* path -- including fatal errors -- so a crashed run was indistinguishable

@@ -29,6 +29,7 @@ namespace sdpa {
 Solutions::Solutions() {
     // Nothings needs.
     notPositiveDefinite = false;
+    restoredToLastIterate = false;
 }
 
 Solutions::~Solutions() { terminate(); }
@@ -146,8 +147,25 @@ bool Solutions::update(StepLength &alpha, Newton &newton, WorkVariables &work, C
 
     total_judge = computeInverse(work, com);
     if (total_judge == FAILURE) {
-        // The new X or Z is not positive definite. See sdpa_dataset.h.
+        // The new X or Z is not positive definite. The step that produced it is
+        // still in scope, so the update is TRANSACTIONAL the cheap way: subtract
+        // it back and refactor. The restored point differs from the true
+        // previous iterate only by one add/sub rounding per entry -- it was
+        // strictly interior (its factorisation succeeded last iteration), so
+        // the refactor succeeds and the caller can report a PARTIAL result with
+        // a genuinely valid point instead of discarding the whole run. Without
+        // this, two of ten SDPLIB problems at this fork's own default
+        // parameters printed nothing at all.
         notPositiveDefinite = true;
+        dd_real minus_primal = -alpha.primal;
+        dd_real minus_dual = -alpha.dual;
+        Lal::let(xMat, '=', xMat, '+', newton.DxMat, &minus_primal);
+        Lal::let(yVec, '=', yVec, '+', newton.DyVec, &minus_dual);
+        Lal::let(zMat, '=', zMat, '+', newton.DzMat, &minus_dual);
+        if (computeInverse(work, com) == _SUCCESS) {
+            notPositiveDefinite = false;
+            restoredToLastIterate = true;
+        }
     }
 
     return total_judge;

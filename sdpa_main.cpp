@@ -559,8 +559,17 @@ int pinpal(char *dataFile, char *initFile, char *outFile, char *paraFile, bool i
             //     the same "cannot move" message as before.
             //   - Cholesky of the new X or Z failed: the iterate has left the
             //     positive definite cone and is not a solution.
-            if (currentPt.notPositiveDefinite) {
-                failureReason = "Cholesky factorisation failed on the updated X or Z: the iterate is no longer positive definite";
+            if (currentPt.restoredToLastIterate) {
+                // The update left the cone but was rolled back: currentPt again holds
+                // the last valid iterate (to one rounding per entry). Report PARTIAL
+                // and print that point, exit 3 -- not the old behaviour of printing a
+                // corrupted point with exit 0, and not the needless one of printing
+                // nothing: at this fork's default parameters real SDPLIB problems end
+                // exactly here.
+                failureReason = "the updated X or Z left the positive definite cone; the step was rolled back and the last valid iterate is reported";
+                failureIteration = pIteration;
+            } else if (currentPt.notPositiveDefinite) {
+                failureReason = "Cholesky factorisation failed on the updated X or Z and the rollback could not be refactored: the iterate is corrupted";
                 failureIteration = pIteration;
                 iterateCorrupted = true;
             } else {
