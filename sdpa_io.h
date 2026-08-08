@@ -45,9 +45,9 @@ class IO {
     // not use
     static void read(FILE *fpData, int m, int SDP_nBlock, int *SDP_blockStruct, int *SDP_CNonZeroCount, int *SDP_ANonZeroCount, int SOCP_nBlock, int *SOCP_blockStruct, int *SOCP_CNonZeroCount, int *SOCP_ANonZeroCount, int LP_nBlock, bool *LP_CNonZeroCount, bool *LP_ANonZeroCount, int nBlock, int *blockStruct, int *blockType, int *blockNumber, bool isDataSparse);
 
-    // 2008/02/27 kazuhide nakata
-    // not use
-    static void read(FILE *fpData, InputData &inputData, int m, int SDP_nBlock, int *SDP_blockStruct, int SOCP_nBlock, int *SOCP_blockStruct, int LP_nBlock, int nBlock, int *blockStruct, int *blockType, int *blockNumber, long position, bool isDataSparse);
+    /* The 2008 'not use' overload (InputData + long position) was removed
+       2026-08-08: never called by any fork, and it retained the unchecked
+       legacy indexing the hardened readers exist to replace (review2). */
 
     // 2008/02/27 kazuhide nakata
     // without LP_ANonZeroCount

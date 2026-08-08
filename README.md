@@ -39,10 +39,17 @@ has the full rationale per change.
 |---|---|---|---|
 | sdpa-dd 7.1.2 (2009) | 1107.3 s | 309.6 s | 360.0 s |
 | upstream master, threaded | 537.8 s | 136.7 s | 112.4 s |
-| **this fork** | **292.0 s** | **58.8 s** | **86.0 s** |
+| **this fork** (2026-08-02 campaign) | **292.0 s** | **58.8 s** | **86.0 s** |
+
+> The table above is the ORIGINAL release campaign, kept as history. The current
+> tables live in [BENCHMARKS.md](BENCHMARKS.md), regenerated 2026-08-07 after the
+> threading and contraction work: the same optimized8 column now totals 44.9 s and
+> the headline is quoted PER ITERATION (7.78x vs v712), because the contraction pin
+> changed trajectories on 9 of 20 problems and a wall ratio across different
+> iteration counts mixes speed with path length.
 | vs upstream master (end-to-end) | **1.84×** | **2.33×** | **1.31×** |
 
-Serial upstream and optimized trajectories match on 20/20 problems, on all three machines.
+Serial upstream and optimized trajectories matched on 20/20 problems, on all three machines, in that campaign (pre-contraction-pin; see BENCHMARKS.md for the current comparison).
 **Threaded upstream is nondeterministic** (e.g. `control1` across three repeats: 69/74/88
 iterations at 24 threads on the i9, 69/82/109 at 8 threads on the EPYC; this fork: 71/71/71
 on both), so the vs-upstream figures are observed end-to-end speedups rather than strictly
