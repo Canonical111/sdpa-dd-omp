@@ -88,6 +88,20 @@ jobs:
           grep -q objValPrimal /tmp/neg.out 2>/dev/null && fail "negative index produced a solution"
           # block index out of range
           awk 'NR==6 {print "1 99 1 1 1.0"; next} {print}' example1.dat-s > bad-block.dat-s
+          # six fields on one record: extra token must be rejected AT ITS LINE,
+          # not diagnosed as a truncation four records later (review2 finding on
+          # the earlier wrong-diagnostic behaviour)
+          awk 'NR==6 {print "0 1 1 1 -11 99"; next} {print}' example1.dat-s > six-field.dat-s
+          rc=0; ./sdpa_dd -ds six-field.dat-s -o /tmp/sf.out -p param.sdpa 2>sf.err || rc=$?
+          [ "$rc" -eq 1 ] || fail "six-field record: rc=$rc, want 1"
+          grep -q 'line 6' sf.err || fail "six-field record not diagnosed at line 6: $(head -1 sf.err)"
+          # zero and negative header dimensions must be clean rejections, not
+          # bad_array_new_length aborts (review2 dimension hardening)
+          for dim in 0 -3; do
+            awk -v d=$dim 'NR==1 {print d; next} {print}' example1.dat-s > bad-m.dat-s
+            rc=0; ./sdpa_dd -ds bad-m.dat-s -o /tmp/bm.out -p param.sdpa 2>bm.err || rc=$?
+            [ "$rc" -eq 1 ] || fail "m=$dim: rc=$rc, want 1 (clean rejection)"
+          done
           rc=$(run_rc ./sdpa_dd -ds bad-block.dat-s -o /tmp/bb.out -p param.sdpa)
           [ "$rc" -ne 0 ] || fail "out-of-range block index accepted (rc=0)"
           [ "$rc" -lt 128 ] || fail "bad block index killed by signal (rc=$rc), not diagnosed"
@@ -114,6 +128,21 @@ jobs:
           diff /tmp/ip_s.sel /tmp/ip_d.sel \
             || { echo "FAIL: dense and sparse spellings of the same initial point diverged" >&2; exit 1; }
           echo "dense == sparse: $(cat /tmp/ip_s.sel | tr '\n' ' ')"
+      - name: corrupted-iterate failure is fatal and prints no solution (review2 finding 1)
+        run: |
+          set -e
+          # control1 driven past dd precision breaks the updated-X/Z Cholesky at
+          # iteration 71, deterministically. Before the fix this printed a full
+          # solution section and exited 0; bench_v2.sh recorded it as ok.
+          sed -E 's/^1.0E-30/1.0E-40/' param.sdpa > /tmp/hard.sdpa
+          rc=0; ./sdpa_dd -ds tests/control1.dat-s -o /tmp/hard.out -p /tmp/hard.sdpa > /dev/null 2>/tmp/hard.err || rc=$?
+          [ "$rc" -eq 2 ] || { echo "FAIL: expected rc=2, got $rc" >&2; cat /tmp/hard.err >&2; exit 1; }
+          grep -q 'solveStatus = FAILURE' /tmp/hard.out || { echo "FAIL: no machine-readable failure status" >&2; exit 1; }
+          ! grep -q '^xVec' /tmp/hard.out || { echo "FAIL: a solution section was printed for a corrupted iterate" >&2; exit 1; }
+          grep -q 'failureIteration' /tmp/hard.out || { echo "FAIL: failureIteration missing" >&2; exit 1; }
+          # positive control: the same problem at the normal parameter file solves
+          ./sdpa_dd -ds tests/control1.dat-s -o /tmp/ok.out -p param.sdpa > /dev/null
+          grep -q '^xVec' /tmp/ok.out
       - name: 1-thread and 8-thread results are identical (determinism guarantee)
         if: matrix.openmp == 'yes'
         run: |
@@ -344,7 +373,13 @@ jobs:
           # instead of the b-vector, which made them actually reject. Without `|| true`
           # the helper aborts the whole step at the first malformed case, and the job
           # fails with no sanitizer report and no diagnostic, which is what happened.
-          run() { echo "#### $1" >> san.log; shift; ( "$@" ) >> san.log 2>&1 || true; echo "#### rc=$?" >> san.log; }
+          # rc must be captured from the COMMAND, not from `true` (review2 finding
+          # 9: the previous form logged rc=0 for every case, so a missing binary,
+          # a timeout, or a wrong-reason rejection all passed). set -e is
+          # neutralised by capturing in an if.
+          run() { echo "#### $1" >> san.log; shift
+                  local rc=0; ( "$@" ) >> san.log 2>&1 || rc=$?
+                  echo "#### rc=$rc" >> san.log; }
           run example1     ./sdpa_dd -ds example1.dat-s -o /tmp/e1  -p param.sdpa
           for p in SDPLIB/data/control1 SDPLIB/data/hinf1 SDPLIB/data/truss5 SDPLIB/data/truss6; do
             [ -f "$p.dat-s" ] && run "$(basename $p)" ./sdpa_dd -ds "$p.dat-s" -o /tmp/o -p param.sdpa
@@ -358,7 +393,17 @@ jobs:
           if grep -nE 'ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:' san.log; then
             echo "FAIL: sanitizer report(s) above" >&2; exit 1
           fi
-          grep -q '#### example1' san.log || { echo "FAIL: no cases ran" >&2; exit 1; }
+          # Per-case exit-code assertions (review2 finding 9). The valid case must
+          # be 0; malformed inputs must be the documented input status 1 -- not a
+          # signal, not a timeout, not merely nonzero; and the exact number of
+          # cases must have run, so a silently skipped case cannot pass.
+          codes=$(grep -c '^#### rc=' san.log)
+          [ "$codes" -eq 4 ] || { echo "FAIL: expected 4 cases, $codes ran" >&2; exit 1; }
+          awk '/^#### /{name=$2} /^#### rc=/{sub("rc=","",$2); print name, $2}' san.log > rc.tsv
+          grep -q '^example1 0$' rc.tsv || { echo "FAIL: valid case rc != 0" >&2; cat rc.tsv >&2; exit 1; }
+          for c in neg-index bad-block truncated; do
+            grep -q "^$c 1$" rc.tsv || { echo "FAIL: $c rc != 1 (input rejection)" >&2; cat rc.tsv >&2; exit 1; }
+          done
   warnings:
     # Promote the two warning classes this project has actually shipped bugs in:
     #   -Wreturn-type   -- rdpotf2_ fell off the end of a non-void function, and eight
