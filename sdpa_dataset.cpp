@@ -37,6 +37,10 @@ Solutions::~Solutions() { terminate(); }
 Solutions::Solutions(int m, int SDP_nBlock, int *SDP_blockStruct, int SOCP_nBlock, int *SOCP_blockStruct, int LP_nBlock, dd_real lambda, ComputeTime &com) { initialize(m, SDP_nBlock, SDP_blockStruct, SOCP_nBlock, SOCP_blockStruct, LP_nBlock, lambda, com); }
 
 void Solutions::initialize(int m, int SDP_nBlock, int *SDP_blockStruct, int SOCP_nBlock, int *SOCP_blockStruct, int LP_nBlock, dd_real lambda, ComputeTime &com) {
+    // the (m, ...) constructor delegates here and bypasses the default
+    // constructor, so the status flags must be set here too
+    notPositiveDefinite = false;
+    restoredToLastIterate = false;
     mDim = m;
     nDim = 0;
     for (int l = 0; l < SDP_nBlock; ++l) {
@@ -137,6 +141,7 @@ bool Solutions::update(StepLength &alpha, Newton &newton, WorkVariables &work, C
 
     const dd_real cannot_move = 1.0e-4;
     notPositiveDefinite = false;
+    restoredToLastIterate = false;
     if (alpha.primal < cannot_move && alpha.dual < cannot_move) {
         rMessage("Step length is too small. ");
         // Legitimate stagnation stop: X and Z are still positive definite, so the
