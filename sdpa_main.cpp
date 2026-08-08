@@ -66,7 +66,6 @@ namespace sdpa {
 //          - the "objValPrimal < objValDual" stopping criterion fired
 //          - the step length collapsed while the iterate was still a valid
 //            interior point ("Step length is too small." / "cannot move")
-//          - a factorisation failed AFTER real progress had been made
 //        Judge the quality of such an answer from phase.value, the two
 //        objectives and the gap.  Not from the exit status.
 //
@@ -92,10 +91,27 @@ namespace sdpa {
 //            singular.  A failed factorisation at the END of a solve is how this
 //            solver normally STOPS; it is not a sign that anything went wrong.
 //
+//        Since review2 finding 1 such an end-of-solve failure is no longer
+//        folded into exit 0: it exits 3, with the last VALID iterate printed.
+//        The measurements above are why it is exit 3 and not exit 2.
+//
+//   3  SDPA_EXIT_PARTIAL
+//        A factorisation failed after k >= 1 completed iterations and a valid
+//        iterate survives: either the Schur complement failed before X/Z were
+//        touched, or the failed X/Z update was rolled back and refactored
+//        (sdpa_dataset.cpp).  The output carries "solveStatus = PARTIAL",
+//        "failureReason" and "failureIteration = k", followed by the last
+//        valid iterate.  At this fork's default parameters the four cases
+//        from measurement (b) -- control1, theta1, arch0, qap5 -- end here.
+//
 //   2  SDPA_EXIT_NUMERICAL_FAILURE
-//        A factorisation failed before a single iteration completed
-//        (pIteration == 0), or the supplied initial point was not positive
-//        definite.  Nothing derived from the problem was ever computed, and what
+//        Nothing valid survives to print: a factorisation failed before a
+//        single iteration completed (pIteration == 0), the supplied initial
+//        point was not positive definite, or a failed X/Z update could not be
+//        rolled back (the restored point does not refactor).  In the
+//        zero-iteration case what upstream printed was the untouched starting
+//        point -- xVec all zeros, xMat = zMat = lambdaStar*I, objValPrimal =
+//        -0.0 -- dressed in the
 //        upstream printed here was the untouched starting point -- xVec all
 //        zeros, xMat = zMat = lambdaStar*I, objValPrimal = -0.0 -- dressed in the
 //        normal solution format, with a phase, and exit 0.  That is the
@@ -117,29 +133,24 @@ namespace sdpa {
 // Before this change stderr was empty in every such run -- rMessage and rError
 // write to cout -- so a harness watching stderr could not see a numerical
 // breakdown at all.  stderr is now the channel for "something went numerically
-// wrong"; the exit status is the channel for "there is no answer here".  On the
-// ten-problem regression set this makes 4 of 10 valid problems emit a two-line
-// stderr warning.  Nothing is added to the output file or to stdout in that
-// case, so both stay byte-for-byte identical for valid input.
+// wrong"; the exit status says whether, and how much of, an answer exists.
+// Runs that end on a mathematical stopping condition write nothing extra to
+// the output file or to stdout, so their output stays byte-for-byte identical;
+// PARTIAL runs additionally carry the solveStatus block described above.
 // ---------------------------------------------------------------------------
 enum SolveResult { SDPA_EXIT_OK = 0, SDPA_EXIT_INPUT = 1, SDPA_EXIT_NUMERICAL_FAILURE = 2, SDPA_EXIT_PARTIAL = 3 };
 
-// Report a factorisation failure.
-//   fatal == true  -> nothing was computed: this REPLACES the solution section,
-//                     and the caller returns nonzero.
-//   fatal == false -> iterates were computed and are still printed exactly as
-//                     before, so warn on STDERR ONLY.  Nothing is written to the
-//                     output file or to stdout in this case: a valid run's
-//                     output must stay byte-for-byte what it was.
+// Report a solve failure on stderr and, per severity, in the output file.
 // One function so the wording a harness greps for cannot drift between sites.
 /* Three failure severities, decided by what state survives (review2 finding 1):
      FATAL      nothing was computed (iteration 0)          -> FAILURE, no solution, exit 2
-     CORRUPTED  Solutions::update() replaced X/Z and the    -> FAILURE, no solution, exit 2
-                new matrices are not positive definite; the
-                in-memory iterate is INVALID and printing it
-                would present a non-PSD point as a solution
-     PARTIAL    the Schur factorisation failed AFTER k good  -> PARTIAL, previous valid
-                iterations; currentPt was not yet touched       iterate printed, exit 3
+     CORRUPTED  a failed X/Z update could not be rolled     -> FAILURE, no solution, exit 2
+                back: the restored point does not refactor,
+                so no valid in-memory iterate survives
+     PARTIAL    the Schur factorisation failed AFTER k good -> PARTIAL, last valid
+                iterations (currentPt untouched), or the       iterate printed, exit 3
+                failed X/Z update was rolled back and
+                refactored (sdpa_dataset.cpp)
    Before this, every non-zero-iteration failure printed the ordinary final
    section and exited 0 -- an updated-X/Z breakdown was indistinguishable from
    success, and bench_v2.sh recorded it as an ok row. */
