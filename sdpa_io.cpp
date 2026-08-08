@@ -641,6 +641,12 @@ void IO::read(FILE *fpData, FILE *fpout, int &m, char *str) {
                 fprintf(stderr, "SDPA data file: mDIM must be at least 1, found %d\n", m);
                 rError("IO::read:: mDIM out of range in the SDPA header");
             }
+            if (m == INT_MAX) {
+                // downstream allocations are new vector<int>[m + 1]: m + 1 must not
+                // overflow, and the file-size bound alone does not forbid this value
+                fprintf(stderr, "SDPA data file: mDIM = %d is not representable once incremented\n", m);
+                rError("IO::read:: mDIM out of range in the SDPA header");
+            }
             {
                 const long bound = inputFileBound(fpData);
                 if (static_cast<long>(m) > bound) {
