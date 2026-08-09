@@ -74,7 +74,13 @@ check_clone() {
             rc=1; continue
         fi
         # the notice must be DATED: "in-file, dated" is the documented policy
-        if ! "$GREP" -E "($MARKER)" -A6 "$f" | "$GREP" -qE "$DATE_RE"; then
+        # NOT a pipeline: `grep -q` exits at the first match, the producer gets
+        # SIGPIPE, and `set -o pipefail` turns that into a failed test -- which
+        # made this report "no ISO date" for a correctly dated file whose notice
+        # happens to be followed by a very long line. Capture, then test.
+        local ctx
+        ctx=$("$GREP" -E "($MARKER)" -A6 "$f")
+        if ! printf '%s' "$ctx" | "$GREP" -qE "$DATE_RE"; then
             echo "FAIL: $name/$p has a notice with no ISO date" >&2
             rc=1
         fi
