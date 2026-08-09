@@ -140,24 +140,16 @@ jobs:
           [ "$rc" -eq 1 ] || { echo "FAIL: mDIM=INT_MAX rc=$rc, want 1" >&2; exit 1; }
           grep -q 'not representable once incremented' im.err || { echo "FAIL: wrong diagnostic: $(head -1 im.err)" >&2; exit 1; }
           echo "-50000 LP block solves; 4300*500000 dies at the checked product; mDIM=INT_MAX rejected"
-      - name: every changed source file carries a modification notice (GPLv2 2a / LGPL-3 4a)
+      - name: every changed source file carries a dated, correctly-licensed notice
         run: |
           set -e
-          # The READMEs and PUBLISHING.md make this claim universally; it was
-          # not true until review2's final round found nine counterexamples.
-          # CI is where it can be checked, because the runner has full history.
+          # PUBLISHING.md and this fork's README claim this universally; it was
+          # untrue until it was checked. The checker is shared with the recipe
+          # repository (patches/check_notices.sh) and self-tests itself, so a
+          # marker-only or fail-open regression in the checker fails the job too.
           git fetch --unshallow 2>/dev/null || true
-          first=$(git log --format='%H %an' | grep Zechuan | tail -1 | cut -d' ' -f1)
-          base=$(git rev-parse "$first^")
-          echo "upstream base: $(git rev-parse --short $base)"
-          bad=0
-          while read -r p; do
-            [ -f "$p" ] || continue
-            grep -q "MODIFIED from upstream\|MODIFICATION NOTICE\|NEW FILE" "$p" \
-              || { echo "FAIL: $p is changed from upstream but carries no notice" >&2; bad=1; }
-          done < <(git diff --name-only "$base..HEAD" | grep -E '\.(cpp|h)$')
-          [ $bad -eq 0 ] || exit 1
-          echo "every changed .cpp/.h carries a notice"
+          bash .github/check_notices.sh --self-test
+          bash .github/check_notices.sh .
       - name: interleaved LP/SDP initial point, dense vs sparse (review2 finding 2)
         run: |
           set -e
