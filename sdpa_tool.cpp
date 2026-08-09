@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
   $Id: rsdpa_tool.cpp,v 1.2 2004/09/01 06:34:12 makoto Exp $
 -----------------------------------------*/
 
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-09 (notice added; the change dates from the clock fix): the timing helpers moved to sdpa_tool.h as a steady_clock implementation, and the dead timeval API and its now-unused time headers were removed from this file. See git log. */
 #include <sdpa_tool.h>
 
 
