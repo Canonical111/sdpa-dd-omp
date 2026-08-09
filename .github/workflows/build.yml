@@ -301,6 +301,8 @@ jobs:
             grep -E 'objValPrimal|objValDual|phase\.value|Iteration =|relative gap|feas\.error' "$1" || true
             awk '/^xVec *=/{f=1} f && !/time *=/' "$1"
           }
+          # problems whose DEFAULT-parameter run ends PARTIAL (exit 3) in this fork
+          PARTIAL_SET="SDPLIB/data/control1 SDPLIB/data/theta1 SDPLIB/data/arch0"
           : > z.sel; : > p.sel
           for d in example1 SDPLIB/data/control1 SDPLIB/data/theta1 SDPLIB/data/truss5 \
                    SDPLIB/data/arch0 SDPLIB/data/gpp100 SDPLIB/data/mcp100; do
@@ -315,11 +317,13 @@ jobs:
             rm -f zo.out po.out
             rz=0; OMP_NUM_THREADS=2 ./build-zero/sdpa_dd    -ds "$f" -o zo.out -p param.sdpa >/dev/null 2>&1 || rz=$?
             rp=0; OMP_NUM_THREADS=2 ./build-pattern/sdpa_dd -ds "$f" -o po.out -p param.sdpa >/dev/null 2>&1 || rp=$?
-            # Each rc must be an ALLOWED status, not merely equal to the other:
-            # two builds failing the same way is not evidence of equal
-            # initialised behaviour. 0 = solved, 3 = PARTIAL by design.
+            # Each rc must be the status EXPECTED FOR THIS PROBLEM, not merely
+            # equal to the other and not merely "0 or 3" (review2 §13.3: a blanket
+            # 0|3 lets an ordinary problem regress to PARTIAL in both instrumented
+            # builds and still pass). control1, theta1 and arch0 are this fork's measured default-parameter PARTIAL cases.
+            case " $PARTIAL_SET " in *" $d "*) want=3 ;; *) want=0 ;; esac
             for r in "$rz" "$rp"; do
-              case "$r" in 0|3) ;; *) echo "FAIL: $f exited $r (want 0 or 3)" >&2; exit 1 ;; esac
+              [ "$r" = "$want" ] || { echo "FAIL: $f exited $r, expected $want" >&2; exit 1; }
             done
             [ "$rz" = "$rp" ] || { echo "FAIL: $f rc differs, zero=$rz pattern=$rp" >&2; exit 1; }
             # and each run must have produced a real solution section of its own

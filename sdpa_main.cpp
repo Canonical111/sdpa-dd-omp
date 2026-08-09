@@ -20,7 +20,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 ------------------------------------------------------------- */
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-03: fatal parameter-file error exits non-zero; solver status propagated to exit code. See git log. */
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-05: the residual is built once into currentRes; initRes keeps only the scalars the solve actually reads, so the second full copy is never allocated. See git log. */
-/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-06: numerical solve failure is tracked, suppresses the solution section, is diagnosed on stderr and exits non-zero; exit-status policy documented in this file; fpu_fix_end() moved before the return. See git log. */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-06, amended 2026-08-09: numerical solve failure is tracked, diagnosed on stderr and given a distinct exit status; the solution section is suppressed ONLY when no valid iterate survives (exit 2) -- a recoverable late failure exits 3 and PRINTS the last valid iterate; exit-status policy documented in this file; fpu_fix_end() moved before the return. See git log. */
 
 #ifndef _MAIN_
 #define _MAIN_
@@ -111,13 +111,12 @@ namespace sdpa {
 //        rolled back (the restored point does not refactor).  In the
 //        zero-iteration case what upstream printed was the untouched starting
 //        point -- xVec all zeros, xMat = zMat = lambdaStar*I, objValPrimal =
-//        -0.0 -- dressed in the
-//        upstream printed here was the untouched starting point -- xVec all
-//        zeros, xMat = zMat = lambdaStar*I, objValPrimal = -0.0 -- dressed in the
-//        normal solution format, with a phase, and exit 0.  That is the
-//        wrong-answer bug this policy exists to kill.  Here the solution section
-//        is SUPPRESSED, the output file carries "solveStatus = FAILURE", and the
-//        exit status is nonzero.
+//        -0.0 -- dressed in the normal solution format, with a phase, and exit
+//        0.  That is the wrong-answer bug this policy exists to kill.  In THIS
+//        case, and only this case, the solution section is suppressed: there is
+//        no valid iterate to print.  The output file carries
+//        "solveStatus = FAILURE" and the exit status is nonzero.  (Exit 3 above
+//        is the opposite situation: a valid iterate survives and IS printed.)
 //
 //   1  SDPA_EXIT_INPUT
 //        Unusable input or usage: unreadable file, malformed data, bad options.

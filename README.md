@@ -96,17 +96,14 @@ autoreconf -fi                       # upstream ships configure.ac only, no conf
 make -j$(nproc)
 ```
 
-Verified on a fresh Ubuntu 24.04 clone (gcc 13) and by CI on every push. **If** `make` stops
-inside SPOOLES with a `struct timezone` error (seen with some toolchains — upstream's
-`.POSIX:` Make.inc selects `c99` as the compiler):
-
-```bash
-sed -i 's|^# CC = gcc|  CC = gcc|' external/spooles/work/internal/Make.inc
-( cd external/spooles/work/internal && find . -name '*.o' -delete && rm -f spooles.a \
-  && make global -f makefile && mkdir -p ../../../i/SPOOLES/lib \
-  && cp spooles.a ../../../i/SPOOLES/lib/libspooles.a )
-make -j$(nproc)
-```
+Verified on a fresh Ubuntu 24.04 clone (gcc 13) and by CI on every push. Plain `make` is
+expected to work: upstream's `.POSIX:` Make.inc selects `c99`, which rejects the flags and used
+to stop the build with a `struct timezone` error, so the tree now applies
+`external/spooles/patches/patch-Make.inc` itself and passes the configured compiler on the
+SPOOLES make line. CI asserts that the patched flags reached the real compile lines, so a
+regression here fails the build rather than being papered over by hand. **If** `make` still
+stops inside SPOOLES, that fix has regressed — please report it; do not repair `Make.inc`
+manually, because the next `make` re-extracts SPOOLES and discards the edit.
 
 Prefer it automated? This repository packages an agent skill —
 [`.claude/skills/install-sdpa-omp/`](.claude/skills/install-sdpa-omp/) — that performs the
@@ -127,14 +124,7 @@ GCC=$(ls $(brew --prefix gcc)/bin/gcc-[0-9]* | head -1)   # resolve the current 
 GXX=$(ls $(brew --prefix gcc)/bin/g++-[0-9]* | head -1)   # (brew install may have just upgraded it)
 autoreconf -fi
 ./configure CC="$GCC" CXX="$GXX" --enable-openmp=yes
-make -j8 || true   # first pass stops inside SPOOLES (Apple's c99 rejects the flags) -- expected
-M=external/spooles/work/internal/Make.inc
-sed -i '' 's|^# CC = gcc|  CC = '$GCC'|' $M
-sed -i '' 's|^  CFLAGS += -O2 -funroll-all-loops|  CFLAGS += -O2 -funroll-all-loops -Wno-error=int-conversion -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types|' $M
-( cd external/spooles/work/internal && find . -name '*.o' -delete && rm -f spooles.a \
-  && make global -f makefile && mkdir -p ../../../i/SPOOLES/lib \
-  && cp spooles.a ../../../i/SPOOLES/lib/libspooles.a )
-make -j8
+make -j8          # the SPOOLES compiler/flags fix is applied in-tree; no manual Make.inc edit
 otool -L sdpa_dd | grep gomp    # must print libgomp -- the proof the build is threaded
 ```
 
