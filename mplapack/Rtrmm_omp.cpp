@@ -26,11 +26,11 @@
  *
  */
 
-/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: new file. Column-parallel Rtrmm for the
+/* MODIFIED from upstream (BSD 2-clause; this file is BSD-licensed MPLAPACK, not GPL -- the original copyright notice above is retained and the change is recorded here), 2026-08-04: new file. Column-parallel Rtrmm for the
    single case the solver uses (Left / Lower / Transpose); every other case is handed to the
    serial Rtrmm. The parallel body is a verbatim copy of that branch of Rtrmm.cpp, including the
    zero-skip this fork added there on 2026-08-03 -- the two must be kept in step. See git log. */
-/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: work gate calibrated on thanos and pi;
+/* MODIFIED from upstream (BSD 2-clause; this file is BSD-licensed MPLAPACK, not GPL -- the original copyright notice above is retained and the change is recorded here), 2026-08-04: work gate calibrated on thanos and pi;
    MPLAPACK_OMP_MIN_TRMM_WORK_8T renamed to MPLAPACK_OMP_MIN_TRMM_WORK because the measured
    break-even does not track the team size. Measured crossover is n = 10-12 (thanos) and
    n = 12-16 (pi), not the n >= 45 previously assumed. See mplapack_omp_tuning.h and git log. */

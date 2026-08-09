@@ -26,7 +26,9 @@ hardware FMA for the bundled QD on aarch64, and the FP-contraction pin described
 change carries its evidence in its commit message; [BENCHMARKS.md](BENCHMARKS.md) holds the
 regenerated tables.
 
-Every modified source file carries an in-file, dated change notice (GPLv2 §2a). The
+Every modified or added source file carries an in-file, dated change notice naming its own
+licence: GPLv2 §2a for the SDPA sources, and the 2-clause BSD terms for `mplapack/`, which
+carries no GNU licence at all. The
 complete, always-current list is `git diff --stat <upstream-base>..HEAD` — an enumeration
 here went stale twice and is deliberately not repeated. `git log` has the rationale per
 change.

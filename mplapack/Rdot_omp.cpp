@@ -72,7 +72,7 @@ Based on http://www.netlib.org/blas/ddot.f
 Rdot forms the dot product of two vectors.
 */
 
-/* MODIFIED from upstream (GPLv2 2a notice), 2026-07-31: Rdot runs serially in the original summation order. See git log. */
+/* MODIFIED from upstream (BSD 2-clause; this file is BSD-licensed MPLAPACK, not GPL -- the original copyright notice above is retained and the change is recorded here), 2026-07-31: Rdot runs serially in the original summation order. See git log. */
 #include <mpblas_dd.h>
 #ifdef _OPENMP
 #include <omp.h>

@@ -1,9 +1,15 @@
 #ifndef MPLAPACK_OMP_TUNING_H
 #define MPLAPACK_OMP_TUNING_H
 
-/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: added the Left-side triangular-kernel
+/* New file added by this fork, 2026-08-04. It lives in the bundled MPLAPACK tree and is
+   offered under the same 2-clause BSD terms as the files around it:
+   Redistribution and use in source and binary forms, with or without modification, are
+   permitted provided that the copyright notice and this list of conditions are retained. No upstream file corresponds
+   to it, so there is nothing to state changes against; the notices below record its history. */
+
+/* MODIFIED from upstream (BSD 2-clause; this file is BSD-licensed, not GPL), 2026-08-04: added the Left-side triangular-kernel
    work gates used by Rtrsm_omp/Rtrmm_omp. See git log. */
-/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: the two triangular work gates were
+/* MODIFIED from upstream (BSD 2-clause; this file is BSD-licensed, not GPL), 2026-08-04: the two triangular work gates were
    calibrated on hardware and the thread-count scaling replaced; the constants that were here
    before had never been measured. See the block below and git log. */
 

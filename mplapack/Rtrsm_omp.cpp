@@ -26,14 +26,14 @@
  *
  */
 
-/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: new file. Column-parallel Rtrsm for the
+/* MODIFIED from upstream (BSD 2-clause; this file is BSD-licensed MPLAPACK, not GPL -- the original copyright notice above is retained and the change is recorded here), 2026-08-04: new file. Column-parallel Rtrsm for the
    single case the solver uses (Left / Lower / NoTranspose); every other case is handed to the
    serial Rtrsm. See git log. */
-/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: work gate calibrated on thanos and pi;
+/* MODIFIED from upstream (BSD 2-clause; this file is BSD-licensed MPLAPACK, not GPL -- the original copyright notice above is retained and the change is recorded here), 2026-08-04: work gate calibrated on thanos and pi;
    MPLAPACK_OMP_MIN_TRSM_WORK_8T renamed to MPLAPACK_OMP_MIN_TRSM_WORK because the measured
    break-even does not track the team size. Measured crossover is n = 10-13 (thanos) and
    n = 12-18 (pi), not the n >= 64 previously assumed. See mplapack_omp_tuning.h and git log. */
-/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: second handled case added,
+/* MODIFIED from upstream (BSD 2-clause; this file is BSD-licensed MPLAPACK, not GPL -- the original copyright notice above is retained and the change is recorded here), 2026-08-04: second handled case added,
    Right / Lower / Transpose, which is Rpotrf's block-column panel solve. It is parallelised
    over the m ROWS of B, not the columns -- see "Why rows for Right" below. The Left case and
    its gate constant are untouched: the same operands take the same branch and produce the same

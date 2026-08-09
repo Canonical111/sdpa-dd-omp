@@ -1,3 +1,6 @@
+/* New file added by this fork, 2026-08-04: a test, not part of the solver build. Offered
+   under the GNU General Public License version 2 or later, as the SDPA sources it exercises
+   are. No upstream file corresponds to it; the notices below record its history. */
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: new file, not part of the solver.
    Regression cell for the numerical invariants the Rpotrf lower-path threading rests on.
    See git log and the CI step "kernel accumulation-form invariant".

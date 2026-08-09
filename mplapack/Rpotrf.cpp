@@ -127,7 +127,7 @@ void Rpotrf(const char *uplo, mplapackint const n, dd_real *a, mplapackint const
                 //              for non-positive-definiteness.
                 //
                 jb = std::min(nb, n - j + 1);
-                /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: Rsyrk -> Rsyrk_omp and
+                /* MODIFIED from upstream (BSD 2-clause; this file is BSD-licensed MPLAPACK, not GPL -- the original copyright notice above is retained and the change is recorded here), 2026-08-04: Rsyrk -> Rsyrk_omp and
                    Rtrsm -> Rtrsm_omp in the LOWER path only. These are the two panel kernels
                    that were still serial here; the Rgemm below already threads via
                    Rgemm_NT_omp. Rsyrk_omp splits the jb output columns, Rtrsm_omp splits the

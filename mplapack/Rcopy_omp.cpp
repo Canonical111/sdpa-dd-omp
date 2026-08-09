@@ -72,7 +72,7 @@ Based on http://www.netlib.org/blas/dcopy.f
 Rcopy copies a vector, x, to a vector, y.
 */
 
-/* MODIFIED from upstream (GPLv2 2a notice), 2026-07-31: OpenMP gated on vector length. See git log. */
+/* MODIFIED from upstream (BSD 2-clause; this file is BSD-licensed MPLAPACK, not GPL -- the original copyright notice above is retained and the change is recorded here), 2026-07-31: OpenMP gated on vector length. See git log. */
 #include <mpblas_dd.h>
 #include "mplapack_omp_tuning.h"
 #ifdef _OPENMP

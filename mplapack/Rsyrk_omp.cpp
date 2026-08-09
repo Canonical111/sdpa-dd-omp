@@ -26,7 +26,7 @@
  *
  */
 
-/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: new file. Column-parallel Rsyrk for the
+/* MODIFIED from upstream (BSD 2-clause; this file is BSD-licensed MPLAPACK, not GPL -- the original copyright notice above is retained and the change is recorded here), 2026-08-04: new file. Column-parallel Rsyrk for the
    single case Rpotrf's lower path uses (Lower / NoTranspose); every other case is handed to the
    serial Rsyrk. See git log. */
 

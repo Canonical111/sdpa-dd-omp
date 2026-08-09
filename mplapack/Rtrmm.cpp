@@ -26,7 +26,7 @@
  *
  */
 
-/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-03: added zero-skip to the B := alpha*A**T*B dot-product branches (netlib dtrmm has no such skip). See git log. */
+/* MODIFIED from upstream (BSD 2-clause; this file is BSD-licensed MPLAPACK, not GPL -- the original copyright notice above is retained and the change is recorded here), 2026-08-03: added zero-skip to the B := alpha*A**T*B dot-product branches (netlib dtrmm has no such skip). See git log. */
 #include <mpblas_dd.h>
 
 void Rtrmm(const char *side, const char *uplo, const char *transa, const char *diag, mplapackint const m, mplapackint const n, dd_real const alpha, dd_real *a, mplapackint const lda, dd_real *b, mplapackint const ldb) {

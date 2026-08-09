@@ -51,14 +51,14 @@ void Rsyr2(const char *uplo, mplapackint const n, dd_real const alpha, dd_real *
 void Rger(mplapackint const m, mplapackint const n, dd_real const alpha, dd_real *x, mplapackint const incx, dd_real *y, mplapackint const incy, dd_real *a, mplapackint const lda);
 void Rtrmm(const char *side, const char *uplo, const char *transa, const char *diag, mplapackint const m, mplapackint const n, dd_real const alpha, dd_real *a, mplapackint const lda, dd_real *b, mplapackint const ldb);
 void Rtrsm(const char *side, const char *uplo, const char *transa, const char *diag, mplapackint const m, mplapackint const n, dd_real const alpha, dd_real *a, mplapackint const lda, dd_real *b, mplapackint const ldb);
-/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: declared the two column-parallel
+/* MODIFIED from upstream (BSD 2-clause; this file is BSD-licensed MPLAPACK, not GPL -- the original copyright notice above is retained and the change is recorded here), 2026-08-04: declared the two column-parallel
    Left-side triangular kernels. See git log.
    These are NOT drop-in replacements for Rtrmm/Rtrsm at every call site by policy: they exist
    so that the Cholesky-inverse phase can be threaded WITHOUT also threading Rtrsm inside
    Rpotrf2's recursion or Rtrmm inside Rlarfb. Each parallelises only the cases it implements
    and delegates every other case, and every sub-threshold call, to the serial kernel; results
    are bit-identical to it at any thread count. */
-/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: Rtrsm_omp gained a second handled case
+/* MODIFIED from upstream (BSD 2-clause; this file is BSD-licensed MPLAPACK, not GPL -- the original copyright notice above is retained and the change is recorded here), 2026-08-04: Rtrsm_omp gained a second handled case
    (Right/Lower/Transpose, split over ROWS) and Rsyrk_omp was added, for Rpotrf's lower blocked
    panel. See git log.
    Permitted call sites, and only these:
