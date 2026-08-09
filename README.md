@@ -26,10 +26,10 @@ hardware FMA for the bundled QD on aarch64, and the FP-contraction pin described
 change carries its evidence in its commit message; [BENCHMARKS.md](BENCHMARKS.md) holds the
 regenerated tables.
 
-Every modified file carries an in-file, dated change notice (GPLv2 §2a):
-`sdpa_newton.cpp`, `sdpa_parts.cpp`, `mplapack/Rgemm_{NN,NT,TN,TT}_omp.cpp`,
-`mplapack/{Rdot,Raxpy,Rcopy}_omp.cpp`; `mplapack/mplapack_omp_tuning.h` is new. `git log`
-has the full rationale per change.
+Every modified source file carries an in-file, dated change notice (GPLv2 §2a). The
+complete, always-current list is `git diff --stat <upstream-base>..HEAD` — an enumeration
+here went stale twice and is deliberately not repeated. `git log` has the rationale per
+change.
 
 ## Measured results
 

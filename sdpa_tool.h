@@ -31,7 +31,6 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 #include <sdpa_right.h>
 
 #include <iostream>
-#include <sys/time.h>
 #include <string>
 #include <cstdlib>
 
@@ -60,11 +59,7 @@ namespace sdpa {
 #define rNewCheck() ;
 #endif
 
-// Elapsed wall time on every fork (steady_clock via rGetUseTime): the old
-// "#if 1 count time with process time / #else real time" alternative was
-// removed 2026-08-09 (review2 §17.5) -- its label had been FALSE since the
-// clock fix (rGetUseTime stopped being process time), and its disabled arm
-// passed a struct timeval that never matched the live signature anyway.
+// Elapsed wall time (steady_clock, via rGetUseTime).
 #define TimeStart(START__) \
    static double START__; START__ = Time::rGetUseTime()
 #define TimeEnd(END__) \
@@ -101,15 +96,6 @@ class Time {
         return std::chrono::duration<double>(now).count();
     }
 
-    // Unused: the "count time with real time" arm of the macros above is behind #if 0, and it
-    // passes a `struct timeval`, which has never matched this signature. Kept in step with
-    // rGetUseTime rather than left on a different clock.
-    static void rSetTimeVal(std::chrono::steady_clock::time_point &targetVal) { targetVal = std::chrono::steady_clock::now(); }
-
-    static double rGetRealTime(const std::chrono::steady_clock::time_point &start, const std::chrono::steady_clock::time_point &end) {
-        std::chrono::duration<double> elapsed_seconds = end - start;
-        return elapsed_seconds.count();
-    }
 };
 
 } // namespace sdpa

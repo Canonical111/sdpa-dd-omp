@@ -777,8 +777,6 @@ void IO::read(FILE *fpData, DenseLinearSpace &xMat, Vector &yVec, DenseLinearSpa
     } // end of 'if (inputSparse)'
 }
 
-// 2008/02/27 kazuhide nakata
-// not use
 
 // 2008/02/27 kazuhide nakata
 // without LP_ANonZeroCount
