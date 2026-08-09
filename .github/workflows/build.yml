@@ -300,8 +300,24 @@ jobs:
             # fork's default parameters control1/theta1/arch0 end there by design)
             # must not kill the step, but a zero-vs-pattern rc disagreement is
             # exactly the uninitialised-read signal this job exists to catch.
+            # Remove BOTH outputs first (review2 §10.2): these names were reused
+            # across problems, so a run that produced no output left the previous
+            # problem's file in place and the selectors compared a stale solution.
+            rm -f zo.out po.out
             rz=0; OMP_NUM_THREADS=2 ./build-zero/sdpa_dd    -ds "$f" -o zo.out -p param.sdpa >/dev/null 2>&1 || rz=$?
             rp=0; OMP_NUM_THREADS=2 ./build-pattern/sdpa_dd -ds "$f" -o po.out -p param.sdpa >/dev/null 2>&1 || rp=$?
+            # Each rc must be an ALLOWED status, not merely equal to the other:
+            # two builds failing the same way is not evidence of equal
+            # initialised behaviour. 0 = solved, 3 = PARTIAL by design.
+            for r in "$rz" "$rp"; do
+              case "$r" in 0|3) ;; *) echo "FAIL: $f exited $r (want 0 or 3)" >&2; exit 1 ;; esac
+            done
+            [ "$rz" = "$rp" ] || { echo "FAIL: $f rc differs, zero=$rz pattern=$rp" >&2; exit 1; }
+            # and each run must have produced a real solution section of its own
+            for o in zo.out po.out; do
+              test -s "$o" || { echo "FAIL: $f produced no $o" >&2; exit 1; }
+              sel "$o" | grep -q '{' || { echo "FAIL: $f $o has no solution rows" >&2; exit 1; }
+            done
             echo "== $f rc=$rz" >> z.sel; sel zo.out >> z.sel
             echo "== $f rc=$rp" >> p.sel; sel po.out >> p.sel
           done
