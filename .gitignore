@@ -52,3 +52,6 @@ desktop.ini
 *~
 .vscode/
 .idea/
+
+# decompressed test inputs (CI and local runs produce these from the tracked .xz)
+SDPLIB/data/*.dat-s
