@@ -173,7 +173,16 @@ jobs:
           [ "$rc" -eq 3 ] || { echo "FAIL: expected rc=3 (partial), got $rc" >&2; cat /tmp/hard.err >&2; exit 1; }
           grep -q 'solveStatus = PARTIAL' /tmp/hard.out || { echo "FAIL: no machine-readable PARTIAL status" >&2; exit 1; }
           grep -q '^xVec' /tmp/hard.out || { echo "FAIL: the rolled-back valid iterate was not printed" >&2; exit 1; }
-          grep -q 'failureIteration = 71' /tmp/hard.out || { echo "FAIL: failureIteration wrong or missing" >&2; exit 1; }
+          # This fork's iteration number IS pinned -- verified portable on x86
+          # Actions as well as arm64. (qd's is not, and says so where it lives:
+          # quad-double trajectories move across architectures.) The internal
+          # invariant is asserted alongside it, so a future output-format change
+          # cannot satisfy the grep while meaning something else.
+          fi=$(sed -n 's/^failureIteration = *//p' /tmp/hard.out | head -1)
+          it=$(sed -n 's/^ *Iteration = *//p' /tmp/hard.out | head -1)
+          echo "observed: failureIteration=$fi, reported Iteration=$it"
+          [ "$fi" = "71" ] || { echo "FAIL: failureIteration $fi, expected 71" >&2; exit 1; }
+          [ "$fi" = "$it" ] || { echo "FAIL: failureIteration $fi != reported Iteration $it" >&2; exit 1; }
           # Positive control: a problem that genuinely solves must still exit 0
           # with no PARTIAL marker. NOT control1 -- at this fork's DEFAULT
           # parameters control1 itself ends PARTIAL (that is the very case the
