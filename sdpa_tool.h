@@ -60,27 +60,16 @@ namespace sdpa {
 #define rNewCheck() ;
 #endif
 
-#if 1 // count time with process time
-#define TimeStart(START__)               \
-    static double START__;                \
-    START__ = Time::rGetUseTime()
-
-#define TimeEnd(END__)                   \
-    static double END__;                  \
-    END__ = Time::rGetUseTime()
-
-#define TimeCal(START__, END__) (END__ - START__)
-#else // count time with real time
-#define TimeStart(START__)               \
-    static struct timeval START__;        \
-    Time::rSetTimeVal(START__)
-
-#define TimeEnd(END__)                   \
-    static struct timeval END__;          \
-    Time::rSetTimeVal(END__)
-
-#define TimeCal(START__, END__) Time::rGetRealTime(START__, END__)
-#endif
+// Elapsed wall time on every fork (steady_clock via rGetUseTime): the old
+// "#if 1 count time with process time / #else real time" alternative was
+// removed 2026-08-09 (review2 §17.5) -- its label had been FALSE since the
+// clock fix (rGetUseTime stopped being process time), and its disabled arm
+// passed a struct timeval that never matched the live signature anyway.
+#define TimeStart(START__) \
+   static double START__; START__ = Time::rGetUseTime()
+#define TimeEnd(END__) \
+   static double END__;   END__ = Time::rGetUseTime()
+#define TimeCal(START__,END__) (END__ - START__)
 // clang-format on
 
 #define REVERSE_PRIMAL_DUAL 1

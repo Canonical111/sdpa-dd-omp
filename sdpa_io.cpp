@@ -782,7 +782,6 @@ void IO::read(FILE *fpData, DenseLinearSpace &xMat, Vector &yVec, DenseLinearSpa
 
 // 2008/02/27 kazuhide nakata
 // without LP_ANonZeroCount
-#if 1
 void IO::read(FILE *fpData, int m, int SDP_nBlock, int *SDP_blockStruct, int SOCP_nBlock, int *SOCP_blockStruct, int LP_nBlock, int nBlock, int *blockStruct, int *blockType, int *blockNumber, InputData &inputData, bool isDataSparse) {
     inputData.initialize_bVec(m);
     read(fpData, inputData.b);
@@ -797,7 +796,6 @@ void IO::read(FILE *fpData, int m, int SDP_nBlock, int *SDP_blockStruct, int SOC
     setElement(fpData, inputData, m, SDP_nBlock, SDP_blockStruct, SOCP_nBlock, SOCP_blockStruct, LP_nBlock, nBlock, blockStruct, blockType, blockNumber, position, isDataSparse);
     //   rMessage(" C and A have been read");
 }
-#endif
 
 // 2008/02/27 kazuhide nakata
 // without LP_ANonZeroCount
@@ -1336,7 +1334,6 @@ void IO::printLastInfo(int pIteration, AverageComplementarity &mu, RatioInitResC
         param.display(fpout);
         com.display(fpout);
 
-#if 1
 #if REVERSE_PRIMAL_DUAL
         fprintf(fpout, "xVec = \n");
         currentPt.yVec.display(fpout, -1.0);
@@ -1346,7 +1343,6 @@ void IO::printLastInfo(int pIteration, AverageComplementarity &mu, RatioInitResC
         currentPt.xMat.display(fpout);
 #else
         currentPt.display(fpout);
-#endif
 #endif
     }
 }
@@ -1521,7 +1517,6 @@ void IO::printLastInfo(int pIteration, AverageComplementarity &mu, RatioInitResC
         param.display(fpout);
         com.display(fpout);
 
-#if 1
 #if REVERSE_PRIMAL_DUAL
         fprintf(fpout, "xVec = \n");
         currentPt.yVec.display(fpout, -1.0);
@@ -1536,7 +1531,6 @@ void IO::printLastInfo(int pIteration, AverageComplementarity &mu, RatioInitResC
         currentPt.yVec.display(fpout);
         fprintf(fpout, "zMat = \n");
         displayDenseLinarSpaceLast(currentPt.zMat, nBlock, blockStruct, blockType, blockNumber, fpout);
-#endif
 #endif
     }
 }

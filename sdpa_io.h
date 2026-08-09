@@ -41,15 +41,7 @@ class IO {
     static void read(FILE *fpData, DenseLinearSpace &xMat, Vector &yVec, DenseLinearSpace &zMat, int nBlock, int *blockStruct, int *blockType, int *blockNumber, bool inputSparse);
     static void read(FILE *fpData, int m, int SDP_nBlock, int *SDP_blockStruct, int SOCP_nBlock, int *SOCP_blockStruct, int LP_nBlock, int nBlock, int *blockStruct, int *blockType, int *blockNumber, InputData &inputData, bool isDataSparse);
 
-    /* The second 2008 'not use' overload (the NonZeroCount reader) was removed
-       2026-08-09 with its implementation: no fork ever called it, and it was
-       the last copy of the unchecked legacy indexing the hardened readers
-       replace (review2 §13.6 -- it had survived the earlier sweep in dd and
-       gmp, which removed only the InputData+position overload). */
 
-    /* The 2008 'not use' overload (InputData + long position) was removed
-       2026-08-08: never called by any fork, and it retained the unchecked
-       legacy indexing the hardened readers exist to replace (review2). */
 
     // 2008/02/27 kazuhide nakata
     // without LP_ANonZeroCount
