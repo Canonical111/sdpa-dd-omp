@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 ------------------------------------------------------------- */
 
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-09 (notice added; changes date from the reader hardening): the dense initial-point reader takes blockType/blockNumber so it can follow the original block order, and the two 2008 'not use' overloads were removed with their implementations. See git log. */
 #ifndef __sdpa_io_h__
 #define __sdpa_io_h__
 

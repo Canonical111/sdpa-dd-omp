@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 ------------------------------------------------------------- */
 
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-09 (notice added; changes date from the failure-policy work): Solutions carries notPositiveDefinite and restoredToLastIterate so the caller can tell a corrupted iterate from a rolled-back one. See git log. */
 #ifndef __sdpa_detaset_h__
 #define __sdpa_detaset_h__
 
