@@ -989,6 +989,7 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
     int actual = 1, max_width = 0;
     // One slot per REQUESTED thread; the region writes only its own index, so no sharing and
     // no reduction clause is needed. Sized on `team` because that is what num_threads asks for.
+    const bool count_work = want_log; // the counters exist to be reported; do not pay otherwise
     std::vector<SpcholWork> per_thread((size_t)(team > 0 ? team : 1));
     for (size_t wi = 0; wi < per_thread.size(); ++wi) {
         per_thread[wi].attempted = 0;
@@ -998,7 +999,7 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
 #pragma omp parallel num_threads(team) default(none)                                        \
     shared(aMat, diagonalIndex, fail, failed_pivot, one_thread, one_thread_r,               \
            pivots_par, pivots_seq, actual, max_width, per_thread)                            \
-    firstprivate(nDIM, force, gate_work, gate_width)
+    firstprivate(nDIM, force, gate_work, gate_width, count_work)
     {
         // THE team, read inside the region that owns it. num_threads() is a REQUEST: OMP_DYNAMIC
         // or a resource limit may return fewer threads, including one, and OpenMP does not
@@ -1010,7 +1011,18 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
         // the same order. With one thread, that thread runs the untouched serial routine.
         const int here = omp_get_num_threads();
         const int me = omp_get_thread_num();
-        SpcholWork *mywork = ((size_t)me < per_thread.size()) ? &per_thread[(size_t)me] : NULL;
+        /* PRIVATE accumulation, written back once at the end of the region.
+           The first version pointed each thread straight at its slot in the shared vector and
+           incremented it inside the innermost scan loop. Adjacent slots share a cache line, so
+           every increment invalidated a neighbour's copy: dE4 went from 9.13 s to 17.60 s, a
+           1.9x regression from counters that exist only to be printed. Accumulate on the
+           thread's own stack -- the compiler keeps these in registers -- and publish once.
+           Counters are also only wired up when logging is on, so the release path carries a
+           null pointer the branch predictor never mispredicts. */
+        SpcholWork mine;
+        mine.attempted = 0;
+        mine.matched = 0;
+        SpcholWork *mywork = count_work ? &mine : NULL;
         if (here < 2) {
             one_thread = true;
             one_thread_r = spchol_serial(aMat, diagonalIndex);
@@ -1068,6 +1080,10 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
                     }
                 }
             }
+        }
+        // One write per thread, after all the work: false sharing here costs nothing.
+        if (count_work && (size_t)me < per_thread.size()) {
+            per_thread[(size_t)me] = mine;
         }
     }
 

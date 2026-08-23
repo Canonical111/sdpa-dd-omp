@@ -855,7 +855,14 @@ jobs:
                      "SDPA_BMAT_MODE=bogus" "SDPA_BMAT_MODE=Fill" \
                      "SDPA_BMAT_MAX_GB=" "SDPA_BMAT_MAX_GB=abc" "SDPA_BMAT_MAX_GB=-1" \
                      "SDPA_SPCHOL_DIGEST_DUMP=/no/such/dir/dump.bin" \
-                     "SDPA_SPCHOL_MUTATE=1" "SDPA_SPCHOL_MUTATE=2" "SDPA_SPCHOL_MUTATE=yes"; do
+                     "SDPA_SPCHOL_MUTATE=1" "SDPA_SPCHOL_MUTATE=2" "SDPA_SPCHOL_MUTATE=yes" \
+                     "SDPA_SPCHOL_MODE=Legacy" \
+                     "SDPA_BMAT_ASM_CENSUS=yes" "SDPA_BMAT_ASM_CENSUS=2" \
+                     "SDPA_BMAT_TEST_BREAK_INVARIANT=1" "SDPA_BMAT_TEST_F2_STALE=1" \
+                     "SDPA_DD_MIN_SPCHOL_WORK=" "SDPA_DD_MIN_SPCHOL_WORK=-5" \
+                     "SDPA_DD_MIN_SPCHOL_WORK=+5" "SDPA_DD_MIN_SPCHOL_WORK=1.5" \
+                     "SDPA_DD_MIN_SPCHOL_WORK=18446744073709551616" \
+                     "SDPA_DD_MIN_SPCHOL_WIDTH=-1" "SDPA_DD_MIN_SPCHOL_TOTAL=-1"; do
             if env $bad ./sdpa_dd -ds example1.dat-s -o /tmp/o -p param.sdpa >/tmp/l 2>&1; then
               echo "FAIL: $bad was ACCEPTED -- a typo must not select a default silently" >&2
               exit 1
@@ -866,8 +873,12 @@ jobs:
           done
           # ...and every VALID value must still be accepted, or the parser is just broken.
           for ok in "SDPA_SPCHOL_MODE=auto" "SDPA_SPCHOL_MODE=serial" "SDPA_SPCHOL_MODE=force" \
+                    "SDPA_SPCHOL_MODE=legacy" \
                     "SDPA_BMAT_MODE=auto" "SDPA_BMAT_MODE=fill" "SDPA_BMAT_MODE=dense" \
-                    "SDPA_BMAT_MAX_GB=100"; do
+                    "SDPA_BMAT_MAX_GB=100" "SDPA_SPCHOL_LOG=0" \
+                    "SDPA_BMAT_ASM_CENSUS=0" "SDPA_BMAT_ASM_CENSUS=1" \
+                    "SDPA_BMAT_TEST_BREAK_INVARIANT=0" "SDPA_BMAT_TEST_F2_STALE=0" \
+                    "SDPA_DD_MIN_SPCHOL_WORK=0" "SDPA_DD_MIN_SPCHOL_TOTAL=0"; do
             env $ok ./sdpa_dd -ds example1.dat-s -o /tmp/o -p param.sdpa >/dev/null 2>&1 \
               || { echo "FAIL: valid setting $ok was refused" >&2; exit 1; }
             echo "  accepted: $ok"
@@ -887,7 +898,17 @@ jobs:
           thr=$(grep -aoE "pivots_threaded=[0-9]+" /tmp/log4 | head -1 | cut -d= -f2)
           [ "${thr:-0}" -ge 1 ] \
             || { echo "FAIL: no pivot ran threaded -- this job would be vacuous" >&2; cat /tmp/log4; exit 1; }
-          echo "  non-vacuity OK: $thr pivots threaded"
+          echo "  route OK: $thr pivots entered the workshared arm"
+          # ...but that is a ROUTE check, not execution proof. A dynamic worksharing loop can be
+          # run entirely by ONE thread while the log reports a full team and every pivot
+          # "threaded" -- observed on the previous, narrower fixture, which reported
+          # "team=2 workers that updated 1" at 8 threads. Assert WORKERS, not pivots.
+          wu=$(sed -n 's/.*workers that updated \([0-9]*\).*/\1/p' /tmp/log4 | head -1)
+          [ "${wu:-0}" -ge 2 ] \
+            || { echo "FAIL: only ${wu:-0} worker(s) updated the factor -- the threading did not"
+                 echo "      actually distribute, so every comparison below is vacuous." >&2
+                 cat /tmp/log4; exit 1; }
+          echo "  non-vacuity OK: $wu workers updated the factor"
           # ---------------------------------------------------------------- bit-identity
           # THREE comparisons, weakest to strongest. The first version of this job had only the
           # weakest one and called the result "bit-identical", which overstated what it tested:
@@ -998,6 +1019,103 @@ jobs:
           grep -q "was not built with" /tmp/nx \
             || { echo "FAIL: refused, but with the wrong diagnostic" >&2; cat /tmp/nx; exit 1; }
           echo "  release build refuses the mutation hook"
+      - name: overflow guards -- the production helpers, at their boundaries
+        run: |
+          set -e
+          # Calls sdpaTriangularCount / sdpaProduct / sdpaFitsInt from sdpa_tool.h -- the SAME
+          # symbols the six guarded allocation sites use. A test that reimplements the guard
+          # would prove the test author can write one, not that the allocations are guarded.
+          g++ -I. -Iexternal/i/QD/include -O2 tests/overflow_guards.cpp -o /tmp/ovg \
+              -Lexternal/i/QD/lib -lqd
+          /tmp/ovg
+      - name: the census, and the fixture that reaches the F2/dense-Aj path
+        run: |
+          set -e
+          # Every real dd problem reports f2dense_total = 0 (no dense A_j anywhere), so this
+          # branch is unreachable on the shipped problem set and needs a purpose-built fixture.
+          python3 tests/gen_f2dense_fixture.py > f2d.dat-s
+          SDPA_BMAT_MODE=sparse SDPA_BMAT_ASM_CENSUS=1 \
+            ./sdpa_dd -ds f2d.dat-s -o /tmp/f2o -p param.sdpa -k 0.3 > /tmp/cen.log 2>&1 || true
+          grep -a "^bmat census: TOTAL" /tmp/cen.log
+          aft=$(sed -n 's/.*f2dense_after_first=\([0-9]*\).*/\1/p' /tmp/cen.log | head -1)
+          [ "${aft:-0}" -ge 1 ] \
+            || { echo "FAIL: the fixture reaches f2dense_after_first=0, so it exercises nothing" >&2
+                 cat /tmp/cen.log; exit 1; }
+          echo "  fixture reaches the consuming path: f2dense_after_first=$aft"
+      - name: negative controls -- prove the new checks can fail
+        run: |
+          set -e
+          make clean >/dev/null 2>&1 || true
+          ./configure --enable-openmp=yes CXXFLAGS="-O2 -DSDPA_SPCHOL_TEST_HOOKS" >/dev/null
+          make -j"$(nproc)" >/dev/null
+          python3 tests/gen_f2dense_fixture.py > f2d.dat-s
+          norm () { sed -e "/Time(sec)/,\$d" "$1" | grep -av -E "^(out|data|parameter) +is|total time|start at|end at"; }
+
+          # (1) The hasF2Gcal path is CONSEQUENTIAL. -ftrivial-auto-var-init cannot show this:
+          #     GCC pattern-init writes 0xFE to an unsigned char but ZERO to a bool, so both
+          #     settings yield `false` and the harmful reading is `true`. Force it instead.
+          SDPA_BMAT_MODE=sparse ./sdpa_dd -ds f2d.dat-s -o /tmp/n1 -p param.sdpa -k 0.3 >/dev/null 2>&1 || true
+          SDPA_BMAT_TEST_F2_STALE=1 SDPA_BMAT_MODE=sparse \
+            ./sdpa_dd -ds f2d.dat-s -o /tmp/n2 -p param.sdpa -k 0.3 >/dev/null 2>&1 || true
+          if diff <(norm /tmp/n1) <(norm /tmp/n2) >/dev/null; then
+            echo "FAIL: forcing the stale-G reading changed nothing -- the fixture does not reach" >&2
+            echo "      a consequential path, so it is a vacuous test." >&2
+            exit 1
+          fi
+          echo "  (1) stale-G injection changes the result: the guarded path matters"
+
+          # (2) The fill>=aggregate invariant can actually fire.
+          if SDPA_BMAT_TEST_BREAK_INVARIANT=1 SDPA_BMAT_MODE=fill \
+               ./sdpa_dd -ds f2d.dat-s -o /tmp/bi -p param.sdpa >/tmp/bl 2>&1; then
+            echo "FAIL: the injected invariant violation did not stop the solve" >&2; exit 1
+          fi
+          grep -q "TEST INJECTION ACTIVE" /tmp/bl \
+            || { echo "FAIL: invariant fired without naming the injection -- a lying diagnostic" >&2
+                 cat /tmp/bl; exit 1; }
+          echo "  (2) the fill-policy invariant fires, and says the value was injected"
+          SDPA_BMAT_MODE=fill ./sdpa_dd -ds f2d.dat-s -o /tmp/bi2 -p param.sdpa >/dev/null 2>&1
+          echo "  (2b) and the same run without injection succeeds"
+
+          # (3) The independent legacy arm agrees with the shared-kernel arms. serial and the
+          #     threaded region both call spchol_k1, so only this can check that kernel.
+          python3 tests/gen_spchol_fixture.py > spchol_fix.dat-s
+          for m in legacy serial force; do
+            rm -f /tmp/lg.$m
+            SDPA_BMAT_MODE=sparse SDPA_SPCHOL_MODE=$m SDPA_SPCHOL_DIGEST_DUMP=/tmp/lg.$m \
+              OMP_NUM_THREADS=4 ./sdpa_dd -ds spchol_fix.dat-s -o /tmp/lo.$m -p param.sdpa >/dev/null 2>&1
+          done
+          cmp /tmp/lg.legacy /tmp/lg.serial \
+            || { echo "FAIL: the independent legacy arm disagrees with serial" >&2; exit 1; }
+          cmp /tmp/lg.legacy /tmp/lg.force \
+            || { echo "FAIL: the independent legacy arm disagrees with the threaded path" >&2; exit 1; }
+          echo "  (3) legacy oracle agrees with serial and threaded, byte for byte"
+
+          # Restore a release build for any later step.
+          make clean >/dev/null 2>&1 || true
+          ./configure --enable-openmp=yes >/dev/null
+          make -j"$(nproc)" >/dev/null
+      - name: a forced mode forces or fails, never downgrades
+        run: |
+          set -e
+          make clean >/dev/null 2>&1 || true
+          ./configure --enable-openmp=no >/dev/null
+          make -j"$(nproc)" >/dev/null
+          if SDPA_SPCHOL_MODE=force ./sdpa_dd -ds example1.dat-s -o /tmp/f -p param.sdpa >/tmp/fl 2>&1; then
+            echo "FAIL: force was accepted by a build without OpenMP -- a benchmark that believed" >&2
+            echo "      it measured the threaded path would have measured the serial one." >&2
+            exit 1
+          fi
+          grep -q "built without OpenMP" /tmp/fl \
+            || { echo "FAIL: refused with the wrong diagnostic" >&2; cat /tmp/fl; exit 1; }
+          echo "  force refused in a serial build"
+          for m in auto serial; do
+            SDPA_SPCHOL_MODE=$m ./sdpa_dd -ds example1.dat-s -o /tmp/f -p param.sdpa >/dev/null 2>&1 \
+              || { echo "FAIL: $m must still work in a serial build" >&2; exit 1; }
+            echo "  $m still takes the serial path"
+          done
+          make clean >/dev/null 2>&1 || true
+          ./configure --enable-openmp=yes >/dev/null
+          make -j"$(nproc)" >/dev/null
       - name: auto must be unchanged by the mode switch
         run: |
           set -e
