@@ -436,6 +436,37 @@ void bmat_dense_cap_check(int m, const char *why) {
     }
 }
 
+/* TEST-ONLY, behind the same compile gate as the spchol hooks: perturb the value COMPARED
+   against the aggregate count so the fill-policy invariant's error branch is executable in CI
+   rather than merely source-audited. Without it, "the invariant never fired" is equally
+   consistent with an invariant that CANNOT fire -- the same vacuity trap SDPA_SPCHOL_MUTATE
+   closes for the factor oracle.
+
+   Absent unless -DSDPA_SPCHOL_TEST_HOOKS, and a build without the gate REFUSES the variable
+   rather than ignoring it: a knob that silently does nothing misleads whoever set it. Ported
+   from gmp. See git log. */
+static bool bmat_test_break_invariant() {
+    const char *e = getenv("SDPA_BMAT_TEST_BREAK_INVARIANT");
+    // "0" means "I am not asking for the hook", which every build can satisfy, so it is
+    // accepted before the compile gate. This follows SDPA_SPCHOL_MUTATE's convention in this
+    // fork rather than gmp's, which refuses even "0" in a release build -- being consistent
+    // with dd's own neighbouring knob matters more here than matching gmp.
+    if (e == NULL || e[0] == '\0' || strcmp(e, "0") == 0) {
+        return false;
+    }
+#ifndef SDPA_SPCHOL_TEST_HOOKS
+    rError("SDPA_BMAT_TEST_BREAK_INVARIANT is a test hook and this binary was not built with"
+           " -DSDPA_SPCHOL_TEST_HOOKS, so the hook does not exist here");
+    return false;
+#else
+    if (strcmp(e, "1") == 0) {
+        return true;
+    }
+    rError("SDPA_BMAT_TEST_BREAK_INVARIANT must be 0 or 1 (got \"" << e << "\")");
+    return false;
+#endif
+}
+
 BMatMode bmat_mode() {
     const char *e = getenv("SDPA_BMAT_MODE");
     if (e == NULL || e[0] == '\0' || strcmp(e, "auto") == 0) {
@@ -460,6 +491,10 @@ BMatMode bmat_mode() {
 
 void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut) {
     const BMatMode mode = bmat_mode();
+    // Parsed HERE, at the top, not at the invariant it feeds: gates 1-3 return early, so a
+    // dense-route problem would otherwise never validate the hook variable and a build without
+    // the test gate would silently accept it. Same lesson as bmat_mode() above.
+    const bool break_inv = bmat_test_break_invariant();
     const bool want_log = (getenv("SDPA_BMAT_LOG") != NULL);
     // Gate 2's cutoff: auto's expression verbatim, or fill's own decoupled constant.
     const double g2 = (mode == BMAT_FILL) ? (BMAT_FILL_BLOCK_FRACTION * m)
@@ -591,10 +626,18 @@ void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut
     // convention. A violation means the counts have left those units -- a build defect, not a
     // data condition -- and it must not be papered over, because the gate-3 skip would then be
     // unsound.
-    if (Method[best] < aggregate_nnz) {
-        rError("Chordal::ordering_bMat: ordered fill " << Method[best]
+    const int fill_for_invariant = break_inv ? (aggregate_nnz - 1) : Method[best];
+    if (fill_for_invariant < aggregate_nnz) {
+        // The diagnostic prints the value that was COMPARED, and says so when that value was
+        // injected -- otherwise it would report a real fill count as "below" an aggregate it
+        // actually exceeds, which is a lying diagnostic (caught in gmp's review round).
+        rError("Chordal::ordering_bMat: ordered fill " << fill_for_invariant
+               << (break_inv ? " (TEST INJECTION ACTIVE: real count was " : " (real count ")
+               << Method[best] << ")"
                << " is below the aggregate pattern " << aggregate_nnz
-               << "; the fill-policy early exit's invariant is broken");
+               << "; the fill-policy early exit's invariant is broken. This is a solver build"
+               << " defect, not a data condition: run with SDPA_BMAT_MODE=dense, which does not"
+               << " consult this count, and report it.");
     }
     if (mode == BMAT_SPARSE) {
         if (want_log)

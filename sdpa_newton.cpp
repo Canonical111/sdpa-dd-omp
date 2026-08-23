@@ -30,6 +30,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 #include <climits>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 
 // review2 dimension edge 2: m and SDP_nBlock are each bounded by the reader,
@@ -44,6 +45,22 @@ static int checkedProductInt(int a, int b, const char *what) {
         std::exit(EXIT_FAILURE);
     }
     return static_cast<int>(p);
+}
+
+// Strict parse of the census knob. Same contract as every other SDPA_* knob in this fork: an
+// unrecognised value is REFUSED, never treated as the default. A typo that silently disabled a
+// census would read as "the census found nothing", which is the worst possible failure mode for
+// a measurement whose whole purpose is to establish reachability.
+static bool bmat_asm_census_wanted() {
+    const char *e = getenv("SDPA_BMAT_ASM_CENSUS");
+    if (e == NULL || e[0] == '\0' || strcmp(e, "0") == 0) {
+        return false;
+    }
+    if (strcmp(e, "1") == 0) {
+        return true;
+    }
+    rError("SDPA_BMAT_ASM_CENSUS must be 0 or 1 (got \"" << e << "\")");
+    return false;
 }
 
 
@@ -1306,9 +1323,87 @@ void Newton::compute_bMat_dense_SDP(InputData &inputData, Solutions &currentPt, 
     }     // end of 'for (int l)'
 }
 
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: added. Ported from gmp.
+
+   Counts what the sparse assembly's pair loop actually contains, per SDP block. The column
+   that motivates it is `f2dense_after_first`: the number of pairs that CONSUME hasF2Gcal
+   without being the first such pair in their group -- i.e. exactly the pairs whose behaviour
+   was undefined before the group-scope fix above. Reasoning about reachability from the source
+   got its answer wrong in both forks, so this prints what the data says instead.
+
+   Also the eligibility census the assembly-threading work needs: group count, largest group,
+   and the formula mix decide whether parallelising over i-groups can balance at all. See git log. */
+void Newton::census_bMat_sparse_SDP(InputData &inputData, FILE *fp) {
+    const int SDP_nBlock_local = inputData.SDP_nBlock;
+    long long tot_pairs = 0, tot_groups = 0, tot_f2dense_after = 0, tot_f2dense_total = 0;
+    fprintf(fp, "bmat census: block  pairs groups maxgrp   F1    F2    F3  denseAj  f2dense_after_first  f2dense_total\n");
+    for (int l = 0; l < SDP_nBlock_local; ++l) {
+        long long pairs = 0, groups = 0, maxgrp = 0, nf[3] = {0, 0, 0};
+        long long denseAj = 0, f2dense_after = 0, f2dense_total = 0;
+        int previous_i = -1;
+        long long cur = 0;
+        long long seen_in_group_f2dense = 0;
+        for (int iter = 0; iter < SDP_number[l]; ++iter) {
+            const int i = SDP_constraint1[l][iter];
+            const int j = SDP_constraint2[l][iter];
+            const int jb = SDP_blockIndex2[l][iter];
+            const FormulaType formula = useFormula[i * SDP_nBlock + l];
+            if (i != previous_i) {
+                if (cur > maxgrp) {
+                    maxgrp = cur;
+                }
+                groups++;
+                cur = 0;
+                seen_in_group_f2dense = 0;
+            }
+            cur++;
+            pairs++;
+            nf[(int)formula]++;
+            const bool aj_dense = (inputData.A[j].SDP_sp_block[jb].type == SparseMatrix::DENSE);
+            if (aj_dense) {
+                denseAj++;
+            }
+            if (formula == F2 && aj_dense) {
+                f2dense_total++;
+                // The first such pair in a group SETS hasF2Gcal; any after it READ it. Before
+                // the group-scope fix, those reads were of indeterminate storage.
+                if (seen_in_group_f2dense > 0) {
+                    f2dense_after++;
+                }
+                seen_in_group_f2dense++;
+            }
+            previous_i = i;
+        }
+        if (cur > maxgrp) {
+            maxgrp = cur;
+        }
+        fprintf(fp, "bmat census: %5d %6lld %6lld %6lld %4lld %5lld %5lld %8lld %10lld %13lld\n",
+                l, pairs, groups, maxgrp, nf[0], nf[1], nf[2], denseAj, f2dense_after, f2dense_total);
+        tot_pairs += pairs;
+        tot_groups += groups;
+        tot_f2dense_after += f2dense_after;
+        tot_f2dense_total += f2dense_total;
+    }
+    fprintf(fp, "bmat census: TOTAL pairs=%lld groups=%lld f2dense_total=%lld f2dense_after_first=%lld\n",
+            tot_pairs, tot_groups, tot_f2dense_total, tot_f2dense_after);
+    fflush(fp);
+}
+
 void Newton::compute_bMat_sparse_SDP(InputData &inputData, Solutions &currentPt, WorkVariables &work, ComputeTime &com) {
     TimeStart(B_NDIAG_START1);
     TimeStart(B_NDIAG_START2);
+
+    // Once per solve, and only when asked. Parsed strictly like every other knob: an
+    // unrecognised value is refused rather than silently treated as "off", because a typo that
+    // silently disables a census reads as "the census found nothing".
+    {
+        static bool census_done = false;
+        // Already validated in Make_bMat; this only reads the answer.
+        if (!census_done && bmat_asm_census_wanted()) {
+            census_done = true;
+            census_bMat_sparse_SDP(inputData, stdout);
+        }
+    }
 
     for (int l = 0; l < SDP_nBlock; ++l) {
         DenseMatrix &xMat = currentPt.xMat.SDP_block[l];
@@ -1316,6 +1411,23 @@ void Newton::compute_bMat_sparse_SDP(InputData &inputData, Solutions &currentPt,
         DenseMatrix &work1 = work.DLS1.SDP_block[l];
         DenseMatrix &work2 = work.DLS2.SDP_block[l];
         int previous_i = -1;
+        /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: hasF2Gcal is GROUP state, not
+           per-pair state, and declaring it inside the pair loop made every pair after a group's
+           first one read indeterminate storage.
+
+           It is passed to calF2 BY REFERENCE, and calF2 both reads and writes it:
+
+               if (hasF2Gcal == false) { Lal::let(G, '=', X, '*', F); hasF2Gcal = true; }
+               Lal::let(ret, '=', Aj, '.', G);
+
+           so an indeterminate `true` does not merely invoke undefined behaviour -- it SKIPS
+           computing G = X*F and contracts Aj against a stale G, producing a silently wrong
+           Schur-complement entry. The value is consumed only when the formula is F2 and Aj is
+           dense, so reaching it needs a group with at least two such pairs; SDPA_BMAT_ASM_CENSUS
+           counts exactly those pairs (f2dense_after_first) so reachability is measurable rather
+           than argued. Ported from gmp, which fixed the same defect after a review supplied a
+           -k counterexample to an earlier claim of unreachability. See git log. */
+        bool hasF2Gcal = false;
 
         for (int iter = 0; iter < SDP_number[l]; iter++) {
             //      TimeStart(B_NDIAG_START1);
@@ -1323,7 +1435,6 @@ void Newton::compute_bMat_sparse_SDP(InputData &inputData, Solutions &currentPt,
             int ib = SDP_blockIndex1[l][iter];
             SparseMatrix &Ai = inputData.A[i].SDP_sp_block[ib];
             FormulaType formula = useFormula[i * SDP_nBlock + l];
-            bool hasF2Gcal;
 
             if (i != previous_i) {
                 // ---------------------------------------------------
@@ -1459,6 +1570,17 @@ void Newton::compute_bMat_sparse_LP(InputData &inputData, Solutions &currentPt, 
 
 void Newton::Make_bMat(InputData &inputData, Solutions &currentPt, WorkVariables &work, ComputeTime &com) {
     TimeStart(START3);
+    // Parse-and-validate the assembly knobs HERE, not inside the sparse routine: Make_bMat is
+    // reached on BOTH routes, the sparse assembly is not. A validator only one route can reach
+    // is not a validator -- this fork has now been bitten by that exact shape three times
+    // (SDPA_SPCHOL_MODE, SDPA_SPCHOL_DIGEST_DUMP, and this).
+    {
+        static bool asm_cfg_done = false;
+        if (!asm_cfg_done) {
+            asm_cfg_done = true;
+            (void)bmat_asm_census_wanted();
+        }
+    }
     if (bMat_type == SPARSE) {
         // set sparse_bMat zero
         for (int iter = 0; iter < sparse_bMat.NonZeroCount; ++iter) {

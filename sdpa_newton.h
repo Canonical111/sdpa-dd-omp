@@ -139,6 +139,8 @@ class Newton {
 
     // B_{i,j} = (X A_i Z^{-1}) \bullet A_j
     void compute_bMat_sparse_SDP(InputData &inputData, Solutions &currentPt, WorkVariables &work, ComputeTime &com);
+    // Eligibility/behaviour census for the sparse assembly; see sdpa_newton.cpp.
+    void census_bMat_sparse_SDP(InputData &inputData, FILE *fp);
 
     void compute_bMat_dense_SOCP(InputData &inputData, Solutions &currentPt, WorkVariables &work, ComputeTime &com);
 
