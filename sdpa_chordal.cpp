@@ -517,9 +517,15 @@ void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut
 
     makeGraph(inputData, m);
 
-    if (mode != BMAT_SPARSE && IVL_tsize(adjIVL) > g3) {
+    // Capture the aggregate count NOW, while adjIVL is still live. Graph_init2 hands adjIVL to
+    // the graph, so the Graph_free below frees it -- and the fill-vs-aggregate invariant is
+    // checked AFTER that free. Reading it there was a heap-use-after-free, which the sanitizer
+    // job caught on the first push. A local costs nothing and cannot dangle.
+    const int aggregate_nnz = IVL_tsize(adjIVL);
+
+    if (mode != BMAT_SPARSE && aggregate_nnz > g3) {
         if (want_log)
-            rMessage("bmat: gate3 aggregate=" << IVL_tsize(adjIVL) << " cutoff=" << g3
+            rMessage("bmat: gate3 aggregate=" << aggregate_nnz << " cutoff=" << g3
                                               << (mode == BMAT_FILL ? " [fill policy]" : "")
                                               << " -> DENSE");
         bmat_dense_cap_check(m, "gate 3");
@@ -585,9 +591,9 @@ void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut
     // convention. A violation means the counts have left those units -- a build defect, not a
     // data condition -- and it must not be papered over, because the gate-3 skip would then be
     // unsound.
-    if (Method[best] < IVL_tsize(adjIVL)) {
+    if (Method[best] < aggregate_nnz) {
         rError("Chordal::ordering_bMat: ordered fill " << Method[best]
-               << " is below the aggregate pattern " << IVL_tsize(adjIVL)
+               << " is below the aggregate pattern " << aggregate_nnz
                << "; the fill-policy early exit's invariant is broken");
     }
     if (mode == BMAT_SPARSE) {
