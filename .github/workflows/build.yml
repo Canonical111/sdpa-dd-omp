@@ -910,20 +910,33 @@ jobs:
           # (a) summary field. Weakest, kept because it is what a user sees.
           #     Count the LINES first: three identical lines and one single line both give
           #     "1 distinct", so without this the test passes when two arms produced nothing.
-          [ "$(wc -l < /tmp/objs)" = 3 ] \
-            || { echo "FAIL: collected $(wc -l < /tmp/objs) objective lines, expected 3" >&2; exit 1; }
-          [ "$(sort -u /tmp/objs | wc -l)" = 1 ] \
+          nl=$(wc -l < /tmp/objs | tr -d ' ')
+          [ "$nl" = 3 ] \
+            || { echo "FAIL: collected $nl objective lines, expected 3" >&2; cat /tmp/objs >&2; exit 1; }
+          [ "$(sort -u /tmp/objs | wc -l | tr -d ' ')" = 1 ] \
             || { echo "FAIL: objectives differ across 1/2/4 threads" >&2; cat /tmp/objs; exit 1; }
           echo "  (a) objValPrimal identical across 1/2/4 threads"
           # (b) the COMPLETE printed result, not one line of it. Timings and the output path are
           #     the only fields legitimately allowed to vary between two runs.
-          norm () { grep -av -E "time *=|^out +is|^data +is" "$1"; }
+          # Everything from the "Time(sec)" header down is a per-phase timing table and cannot be
+          # expected to match. Everything ABOVE it -- the full iteration table, both objectives,
+          # the feasibility errors, the relative eps and the parameter echo -- must. Note this is
+          # a much wider comparison than the timing-line filter it replaces, which left the
+          # per-phase table in and could never have passed.
+          norm () { sed -e "/Time(sec)/,\$d" "$1" | grep -av -E "^(out|data) +is|total time|start at|end at"; }
+          # A normalisation that filters everything would make this pass vacuously, which is the
+          # same failure mode the whole job exists to prevent. Require it to leave real content.
+          nn=$(norm /tmp/bi.1 | wc -l | tr -d " ")
+          [ "${nn:-0}" -ge 20 ] \
+            || { echo "FAIL: normalisation left only $nn lines -- (b) would be vacuous." >&2
+                 echo "      The solver's output format probably changed; fix norm()." >&2
+                 exit 1; }
           for th in 2 4; do
             diff <(norm /tmp/bi.1) <(norm /tmp/bi.$th) > /tmp/d.$th \
               || { echo "FAIL: full output differs between 1 and $th threads" >&2
                    head -40 /tmp/d.$th >&2; exit 1; }
           done
-          echo "  (b) complete printed output identical across 1/2/4 threads"
+          echo "  (b) complete printed output ($nn lines) identical across 1/2/4 threads"
           # (c) THE FACTOR ITSELF, byte for byte -- the claim the threading actually makes.
           #     A canonical length-framed stream over every live element's row, column and both
           #     IEEE limbs. This is a cmp(1), not a hash comparison.
@@ -957,6 +970,15 @@ jobs:
             exit 1
           fi
           echo "  negative control OK: the factor stream detects a one-ulp change"
+          # (b) must also see it -- it is the wider comparison, so if it cannot, norm() is
+          # filtering away the result section rather than just the timings.
+          norm () { sed -e "/Time(sec)/,\$d" "$1" | grep -av -E "^(out|data) +is|total time|start at|end at"; }
+          if diff <(norm /tmp/clean) <(norm /tmp/mutd) >/dev/null; then
+            echo "FAIL: the full-output comparison did not see a one-ulp factor change." >&2
+            echo "      norm() is over-filtering, so check (b) proves nothing." >&2
+            exit 1
+          fi
+          echo "  negative control OK: the full printed output also detects it"
           c=$(grep -a -m1 objValPrimal /tmp/clean | sed 's/.*= *//')
           m=$(grep -a -m1 objValPrimal /tmp/mutd  | sed 's/.*= *//')
           if [ "$c" = "$m" ]; then
