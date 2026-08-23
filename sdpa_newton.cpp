@@ -186,12 +186,39 @@ static const char *bmat_asm_dump_path() {
     return e;
 }
 
-/* Defaults. MIN_PAIRS is dd's own placeholder, not gmp's 4000: copying a gate is the single
-   most expensive mistake available here, and the Cholesky's inherited floor already cost 1.45x
-   once. It is set high enough that `auto` stays SERIAL on everything until the Phase-6 sweep
-   chooses a real value -- the phase preamble forbids moving a default before then. */
+/* CALIBRATED on dd, 2026-08-23, on TWO architectures -- not inherited from gmp, whose 4000 was
+   never measured here. Threading the assembly is forced either way and the whole problem set is
+   swept; the crossover is what the gate encodes.
+
+     problem     pairs        i9-13900K/24thr   M1 Max/10thr
+     example1          6         0.003x            -
+     control1        351         0.427x            -
+     8_min           833         0.813x            -
+     gpp100        5,151         0.133x          0.292x     <- largest problem that LOSES
+     theta1        5,460         1.966x            -        <- marginal win
+     arch0        15,225         9.650x          7.887x     <- smallest CLEAR win
+     10_min       16,219         9.315x          9.698x
+     truss5      124,368         7.208x            -
+     12_min      397,430         6.440x            -
+     dE3       8,113,226        10.398x         10.120x
+     dE4      11,287,191         9.672x            -
+
+   The two architectures agree on the boundary despite differing in core count (24 vs 10), core
+   design (8P+16E heterogeneous vs homogeneous), ISA (x86-64 vs aarch64) and memory system --
+   which is the point of requiring two.
+
+   ADOPTED: 8000, between gpp100's 5,151 (loses on both) and arch0's 15,225 (wins ~8-10x on
+   both). Deliberately NOT at the crossover: theta1 wins only 1.97x at 5,460, so the region
+   just above gpp100 is where the gain is small and the risk of a different machine tipping
+   negative is highest. 8000 keeps every clear win and refuses every measured loss.
+
+   Note the gate is a proxy: pairs alone does not determine the work, since a group's cost also
+   scales with its block dimension (8_min loses at 833 pairs while theta1 wins at 5,460). A
+   work-based gate would be sharper. This one is what gmp uses, it is measured rather than
+   inherited, and it is overridable at runtime -- which is how a machine that disagrees is
+   accommodated without a rebuild. */
 #ifndef SDPA_BMAT_ASM_MIN_PAIRS_DEFAULT
-#define SDPA_BMAT_ASM_MIN_PAIRS_DEFAULT 18446744073709551615ULL /* effectively: never, yet */
+#define SDPA_BMAT_ASM_MIN_PAIRS_DEFAULT 8000ULL
 #endif
 #ifndef SDPA_BMAT_ASM_SCRATCH_MB_DEFAULT
 #define SDPA_BMAT_ASM_SCRATCH_MB_DEFAULT 4096ULL
