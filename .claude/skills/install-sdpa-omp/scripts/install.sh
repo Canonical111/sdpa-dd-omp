@@ -178,10 +178,11 @@ if [ "$SOLVER" = qd ]; then
         "${CFG[@]}" >"$LOG/configure.log" 2>&1 \
         || die "configure failed; see $LOG/configure.log"
 else
-    if [ ! -x configure ]; then
-        note "autoreconf (upstream ships only configure.ac)"
-        autoreconf -fi >"$LOG/autoreconf.log" 2>&1 || die "autoreconf failed; see $LOG/autoreconf.log"
-    fi
+    # Unconditional: an executable configure that survived `git pull` can be STALE relative to
+    # configure.ac, and reusing it silently configures yesterday's build. autoreconf is cheap
+    # next to make, so regenerate every time rather than trusting a timestamp heuristic.
+    note "autoreconf -fi (always: a stale configure surviving git pull must not be reused)"
+    autoreconf -fi >"$LOG/autoreconf.log" 2>&1 || die "autoreconf failed; see $LOG/autoreconf.log"
     ./configure CC="$GCC" CXX="$GXX" "${CFG[@]}" >"$LOG/configure.log" 2>&1 \
         || die "configure failed; see $LOG/configure.log"
     if [ "$OPENMP" = yes ] && grep -q "support OpenMP... unsupported" "$LOG/configure.log"; then
@@ -251,4 +252,8 @@ if [ -n "$PREFIX" ]; then
 fi
 
 rm -rf "$LOG"
-note "DONE. Run with OMP_NUM_THREADS=<physical cores>; pin with taskset/OMP_PLACES=cores on Linux."
+if [ "$OPENMP" = yes ]; then
+    note "DONE. Run with OMP_NUM_THREADS=<one socket's physical cores>; pin with taskset/OMP_PLACES=cores on Linux."
+else
+    note "DONE. Verified SERIAL binary (no OpenMP runtime linked); OMP_NUM_THREADS and thread pinning do not apply."
+fi

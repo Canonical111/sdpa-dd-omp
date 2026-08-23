@@ -40,8 +40,14 @@ To install a sibling solver, clone it first (they are separate repositories):
 
 ## After installing
 
-- Run with `OMP_NUM_THREADS=<physical cores>`. On Linux, pin: `taskset -c <cores>` plus
-  `OMP_PROC_BIND=true OMP_PLACES=cores`. Hybrid CPUs: count P+E physical cores, not threads.
+- Run with `OMP_NUM_THREADS=<physical cores>`; on a **two-socket** machine start at one socket's
+  worth and measure before committing a long run, comparing one socket's physical-core count
+  against the whole machine's with each run pinned to exactly the cores it should use. On Linux
+  pin with `taskset -c <cores>` plus `OMP_PROC_BIND=true OMP_PLACES=cores`.
+- **Hybrid CPUs: never count SMT threads, and benchmark P-only against P+E rather than assuming.**
+  On this fork's own i9-13900K measurements (8P+16E) all 24 physical cores beat the 8 P-cores
+  alone on the five-problem total, 71.9 s against 58.8 s — but that is one machine and one problem
+  set, so measure yours. See BENCHMARKS.md for the per-problem columns.
 - Verify a solve prints identical `Iteration =` and `objValPrimal` at 1 thread and N threads
   — these forks are trajectory-stable by design; upstream is not.
 - BENCHMARKS.md in the repo has measured expectations per machine class.
@@ -64,7 +70,9 @@ To install a sibling solver, clone it first (they are separate repositories):
 ## Facts worth knowing while assisting
 
 - dd/gmp need `autoreconf -fi` (upstream ships no `configure`); qd tracks its `configure`.
-  autoreconf refreshes two *tracked* boilerplate files (`INSTALL`; on gmp also `aclocal.m4`),
+  **In THIS repository (dd) `INSTALL` is tracked and `aclocal.m4` is not** — verified against
+  `git ls-files`, not assumed from a sibling fork; check each fork's own tree before repeating
+  this sentence there. So autoreconf's refresh of `INSTALL` is a working-tree change here,
   and on macOS the qd build replaces tracked `config.guess`/`config.sub`/`configure` with
   arm64-aware versions — the only working-tree changes a successful run leaves. Expected.
   If restoring them: first run `git diff` on each file and confirm its only changes are
