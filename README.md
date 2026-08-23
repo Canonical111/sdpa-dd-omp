@@ -18,11 +18,31 @@ been adopted there; this fork exists so the fixes are usable.
 | 3 | thread the Schur-complement (`bMat`) constraint loop — the dominant gain |
 | 4 | report the reduced per-formula timers as worker-seconds, not elapsed time |
 
-The four patches above are the original port. The fork has since gained substantially more --
-a ten-item correctness batch (exit statuses, container ownership, input bounds, an
-uninitialised-read fix), record-bounded input parsing with line-numbered diagnostics, threaded
-Cholesky panel kernels and X/Z inverse-Cholesky triangulars behind measured work gates,
-hardware FMA for the bundled QD on aarch64, and the FP-contraction pin described below.
+The four patches above are the original port. Two later changes matter as much:
+
+**High-precision input is read correctly.** QD's decimal converter overflows internally at 309
+or more mantissa digits and *returns success while producing NaN*, so a 600-digit spelling of an
+ordinary-magnitude number entered the SDP matrices as NaN and surfaced as a bogus
+`cholesky miss condition` at iteration 0 — the solver reporting an infeasible problem when the
+problem was fine. On a user's 600-digit input, upstream terminates after **0 iterations** with
+`objValPrimal = -0.0`; this fork reaches **pdOPT in 43 iterations**. Truncating that same input to
+30 significant digits — still far beyond double-double's ~32-digit resolution, so the *values* are
+unchanged — makes upstream solve it correctly, which isolates the cause to token length alone.
+The reader now validates full decimal syntax, keeps the original conversion path for mantissas up
+to 308 digits (ordinary inputs stay bit-identical), normalises longer ones with the exponent
+preserved, and checks parser status *and* finiteness rather than letting NaN reach the solver.
+
+**Threading no longer makes small problems slower.** Upstream enters its parallel regions
+regardless of problem size, so on small inputs the fork/join costs more than the work it
+distributes. On a user's `max_custom_scaled.dat-s` (m=16) upstream degrades monotonically at every
+thread count, ending **24.5× slower on 24 cores than on 1**; this fork is flat to four decimal
+places, because the work/width gate declines to thread what cannot repay itself. See
+[BENCHMARKS.md](BENCHMARKS.md).
+
+Beyond those: a ten-item correctness batch (exit statuses, container ownership, input bounds, an
+uninitialised-read fix), threaded Cholesky panel kernels and X/Z inverse-Cholesky triangulars
+behind measured work gates, hardware FMA for the bundled QD on aarch64, and the FP-contraction pin
+described below.
 
 Since then the two remaining serial regions on the large-sparse path have been threaded: the
 **sparse Schur-complement Cholesky** and the **sparse Schur-complement assembly**. Together they

@@ -59,6 +59,59 @@ with `SDPA_BMAT_MODE=fill`, which takes the sparse route upstream cannot thread 
 The 1-thread column is worth its own note: **2.46× before any threading enters**, from the
 `Rgemm` zero-skip and the FP-contraction pin.
 
+### Two problems from a user, and what they show
+
+Both from `input/sdpaquestions/`, run with that folder's own `paramdd.sdpa`. These are the
+sharpest demonstrations of two of this fork's changes, because they are real inputs that upstream
+handles badly rather than synthetic fixtures.
+
+#### `max_custom_scaled.dat-s` (m=16) — upstream is 24.5× slower on 24 cores than on 1
+
+`main loop time`, full solve, best of 3:
+
+| threads | 1 | 2 | 4 | 8 | 16 | 24 | 1→24 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| upstream `6eaad8d` | 0.0144 | 0.0896 | 0.1194 | 0.1540 | 0.2386 | 0.3545 | **0.04× — 24.5× slower** |
+| **this fork** | 0.0119 | 0.0120 | 0.0119 | 0.0120 | 0.0120 | 0.0120 | **0.99× — flat** |
+
+Upstream degrades **monotonically at every step**: each doubling of the thread count makes it
+worse. The problem is tiny (7 blocks of order 4, 3, 10, 5, 6, 2, 2), so the fork/join costs far
+more than the work it distributes, and upstream enters the parallel region regardless.
+
+This fork is **flat to four decimal places** — 0.0119 s at 1 thread, 0.0120 s at 24 — because the
+work/width gate declines to thread what cannot repay itself. At 24 threads the fork is **29.6×
+faster**, entirely by *not* threading.
+
+Upstream's answer also **drifts** here: **16 distinct objective values across 18 runs**, spanning
+`-2.2168869933897821e-02` to `-2.2168869946397239e-02` — a relative spread of 5.6e-10, i.e. the
+last ~10 digits of a double-double result are not reproducible. This fork returns **one** value in
+all 18 runs, at every thread count.
+
+*(The user's own recorded runs show the same effect end to end: 0.600 s total multi-core against
+0.019 s single-core, same 43 iterations, same answer.)*
+
+#### `_max.dat-s` — upstream cannot read it
+
+Not a performance result. This file carries **601-digit mantissas**, and QD's decimal converter
+overflows internally at ≥309 digits while *returning success*, so the values enter the SDP
+matrices as NaN:
+
+| | iterations | phase | objValPrimal |
+|---|---:|---|---|
+| upstream, as given | **0** | `dFEAS` | `-0.0` |
+| upstream, same problem truncated to 30 digits | 43 | `pdOPT` | `-2.2168869950759854e-02` |
+| **this fork**, as given | **43** | `pdOPT` | `-2.2168869945991022e-02` |
+
+Upstream reports `cholesky miss condition :: not positive definite` at iteration 0 — an
+infeasibility diagnosis for a problem that is perfectly feasible. Truncating the mantissas to 30
+significant digits, still far beyond double-double's ~32-digit resolution so the *values* are
+unchanged, makes upstream solve it correctly: **the cause is token length alone.**
+
+This is the defect fixed by the reader work already in this fork, and the measurement above is an
+independent confirmation of it against a fresh upstream build at the fork's own base commit.
+
+---
+
 ### Small problems — where upstream's threading is actively harmful
 
 Full solves, best of 2:
