@@ -386,6 +386,29 @@ struct SpcholCfg {
     int mutate;       // test hook: the digest's negative control
 };
 
+// Forward/backward split of the triangular solve, for the Phase-5 verdict. Process-wide
+// accumulators: solveSystems is called once per iteration from a single thread, so no
+// synchronisation is needed and none is added -- a lock here would perturb what it measures.
+double g_solve_fwd = 0.0;
+double g_solve_bwd = 0.0;
+
+bool solve_profile_wanted() {
+    const char *e = getenv("SDPA_SOLVE_PROFILE");
+    if (e == NULL || e[0] == '\0' || strcmp(e, "0") == 0) {
+        return false;
+    }
+    if (strcmp(e, "1") == 0) {
+        return true;
+    }
+    rError("SDPA_SOLVE_PROFILE must be 0 or 1 (got \"" << e << "\")");
+    return false;
+}
+
+void solve_profile_add(double fwd, double bwd) {
+    g_solve_fwd += fwd;
+    g_solve_bwd += bwd;
+}
+
 const SpcholCfg &spchol_cfg() {
     static bool done = false;
     static SpcholCfg c;
@@ -417,6 +440,7 @@ const SpcholCfg &spchol_cfg() {
             const char *le = getenv("SDPA_SPCHOL_LOG");
             c.log = (le != NULL && le[0] != '\0' && strcmp(le, "0") != 0);
         }
+        (void)solve_profile_wanted(); // validated here, so every route refuses a typo
         c.digest = spchol_want_digest();
         c.dump = spchol_dump_path();
         c.mutate = spchol_mutate(); // rError()s here on a dense-route problem too, by design
@@ -481,6 +505,18 @@ bool spchol_finish(SparseMatrix &aMat, int *diagonalIndex, int nDIM, const Spcho
 }
 
 } // namespace
+
+// Reported at the end of the run, alongside the phase table, when SDPA_SOLVE_PROFILE=1.
+void Lal::reportSolveProfile(FILE *fpOut) {
+    if (!solve_profile_wanted()) {
+        return;
+    }
+    const double tot = g_solve_fwd + g_solve_bwd;
+    fprintf(fpOut, " solve forward   =       %f,  %f%% of the solve phase\n", g_solve_fwd,
+            tot > 0.0 ? 100.0 * g_solve_fwd / tot : 0.0);
+    fprintf(fpOut, " solve backward  =       %f,  %f%% of the solve phase\n", g_solve_bwd,
+            tot > 0.0 ? 100.0 * g_solve_bwd / tot : 0.0);
+}
 
 dd_real Lal::getMinEigen(DenseMatrix &lMat, DenseMatrix &xMat, DenseMatrix &Q, Vector &out, Vector &b, Vector &r, Vector &q, Vector &qold, Vector &w, Vector &tmp, Vector &diagVec, Vector &diagVec2, Vector &workVec) {
     dd_real alpha, beta, value;
@@ -1527,6 +1563,15 @@ bool Lal::solveSystems(Vector &xVec, SparseMatrix &aMat, Vector &bVec) {
             }
         }
 #else
+    /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: split the two triangular passes for
+       measurement. The solve phase is reported as one figure, but only the FORWARD pass is
+       portable to dd -- gmp's threaded backward pass accumulates at twice the vector's
+       precision and dd_real has none to double. Deciding whether to port the forward pass from
+       the combined figure would over-state its ceiling, which the plan forbids. Timed only
+       under SDPA_SOLVE_PROFILE=1. See git log. */
+    const bool solve_prof = solve_profile_wanted();
+    double t_fwd = 0.0, t_bwd = 0.0;
+    double t_s0 = solve_prof ? Time::rGetUseTime() : 0.0;
     for (int index = 0; index < aMat.NonZeroCount; ++index) {
         int i = aMat.row_index[index];
         int j = aMat.column_index[index];
@@ -1537,6 +1582,11 @@ bool Lal::solveSystems(Vector &xVec, SparseMatrix &aMat, Vector &bVec) {
         } else {
             xVec.ele[j] -= value * xVec.ele[i];
         }
+    }
+    if (solve_prof) {
+        const double t1 = Time::rGetUseTime();
+        t_fwd = t1 - t_s0;
+        t_s0 = t1;
     }
     for (int index = aMat.NonZeroCount - 1; index >= 0; --index) {
         int i = aMat.row_index[index];
@@ -1549,6 +1599,10 @@ bool Lal::solveSystems(Vector &xVec, SparseMatrix &aMat, Vector &bVec) {
         } else {
             xVec.ele[i] -= value * xVec.ele[j];
         }
+    }
+    if (solve_prof) {
+        t_bwd = Time::rGetUseTime() - t_s0;
+        solve_profile_add(t_fwd, t_bwd);
     }
 #endif
 #if TUNEUP

@@ -30,6 +30,9 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 namespace sdpa {
 
 class Lal {
+public:
+    // Forward/backward split of the triangular solve; prints only under SDPA_SOLVE_PROFILE=1.
+    static void reportSolveProfile(FILE *fpOut);
   public:
     // calculate the minimum eigenvalue of lMat*xMat*(lMat^T)
     // by Lanczos metnod

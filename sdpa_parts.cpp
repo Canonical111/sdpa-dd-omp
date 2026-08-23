@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: sparse-assembly subphase timers (zero/SDP/LP), populated and reported only under SDPA_BMAT_ASM_PROFILE=1. See git log. */
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-05: MehrotraCorrector computes C.DxMat and b.DyVec once instead of twice. See git log. */
 #include <sdpa_parts.h>
+#include <sdpa_linear.h>
 
 namespace sdpa {
 
@@ -98,6 +99,7 @@ void ComputeTime::display(FILE *fpout) {
         fprintf(fpout, "   asm SDP       =       %f,  %f\n", bmat_asm_sdp, bmat_asm_sdp / MainLoop * 100.0);
         fprintf(fpout, "   asm LP        =       %f,  %f\n", bmat_asm_lp, bmat_asm_lp / MainLoop * 100.0);
     }
+    Lal::reportSolveProfile(fpout);
     fprintf(fpout, " Make bDia time  =       %f,  %f\n", B_DIAG, B_DIAG / MainLoop * 100.0);
     fprintf(fpout, " Make bF1  wsec  =       %f   (worker-s, summed over threads)\n", B_F1);
     fprintf(fpout, " Make bF2  wsec  =       %f   (worker-s, summed over threads)\n", B_F2);
