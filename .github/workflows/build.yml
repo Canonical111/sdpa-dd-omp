@@ -681,73 +681,13 @@ jobs:
           echo "  capable CC (gcc): passed all three guards"
           echo "guard 2: empty, POSIX-default and incapable compilers all rejected; gcc accepted"
 
-  portable-build:
-    # C13, 2026-08-05. Until this date sdpa-dd had NO supported portable or reproducible
-    # build, for two reasons that compounded:
-    #   configure.ac:143-144  AC_SUBST([CFLAGS],[""])  AC_SUBST([CXXFLAGS],[""])
-    #       -- discarded every flag passed to configure, including the $pthread_cflags
-    #          appended four lines above, leaving `CXXFLAGS = ` in the generated Makefile;
-    #   Makefile.am           AM_CXXFLAGS = -O2 -march=native ...
-    #       -- the only remaining source of flags, and unremovable because of the above.
-    # Together: you could not add a flag and you could not take -march=native away, so every
-    # binary was pinned to the ISA of whatever machine built it.
-    #
-    # This job is the regression guard, and it greps COMPILE LINES. It deliberately does not
-    # check that a flag changes the binary: the build path is embedded in the objects, so two
-    # binaries differ whether or not the flag was applied, and an earlier job in this repo
-    # passed for months on exactly that false signal (0 of 3671 compile lines carried the
-    # flag under test).
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: host build deps, with retries -- GitHub's apt mirrors stall intermittently
-        run: |
-          set -e
-          # 2026-08-19: three consecutive runs lost 13-160 minutes with jobs wedged on the very
-          # first `apt-get update`, while OTHER jobs in the same run sailed past it -- so it is
-          # intermittent mirror slowness, not an outage, and not our code. A bare apt call has no
-          # timeout of its own: it waits, the job waits, and the only signal is a run that never
-          # finishes. Each attempt now gets a hard timeout so a wedged mirror costs 3 minutes and
-          # a retry instead of the whole run.
-          for i in 1 2 3 4; do
-            if timeout 180 sudo apt-get update -o Acquire::Retries=3; then break; fi
-            echo "apt-get update attempt $i timed out or failed; retrying" >&2
-            [ "$i" = 4 ] && { echo "FAIL: apt-get update failed 4 times" >&2; exit 1; }
-            sleep $((i * 15))
-          done
-          for i in 1 2 3 4; do
-            if timeout 300 sudo apt-get install -y -o Acquire::Retries=3 build-essential autoconf automake libtool; then break; fi
-            echo "apt-get install attempt $i timed out or failed; retrying" >&2
-            [ "$i" = 4 ] && { echo "FAIL: apt-get install failed 4 times" >&2; exit 1; }
-            sleep $((i * 15))
-          done
-      - run: autoreconf -fi
-      - name: portable build -- user CXXFLAGS reach the compile line, -march=native is gone
-        run: |
-          set -e
-          ./configure --enable-openmp=no --disable-march-native CXXFLAGS=-DPORTABLE_BUILD_PROBE=1 > cfg1.log
-          grep -q '^CXXFLAGS = .*PORTABLE_BUILD_PROBE' Makefile \
-            || { echo 'FAIL: configure discarded CXXFLAGS -- the AC_SUBST([CXXFLAGS],[""]) defect is back' >&2; exit 1; }
-          make -j"$(nproc)" > build1.log 2>&1 || { tail -40 build1.log >&2; exit 1; }
-          n=$(grep -E ' -c ' build1.log | grep -c -- 'PORTABLE_BUILD_PROBE' || true)
-          [ "${n:-0}" -ge 10 ] || { echo "FAIL: only $n compile lines carried the user flag" >&2; exit 1; }
-          m=$(grep -E ' -c ' build1.log | grep -c -- '-march=native' || true)
-          [ "${m:-0}" -eq 0 ] || { echo "FAIL: -march=native survived --disable-march-native on $m compile line(s)" >&2; exit 1; }
-          ./sdpa_dd -ds example1.dat-s -o portable.result -p param.sdpa
-          grep objValPrimal portable.result
-          echo "portable build: $n compile lines carried the user flag, 0 carried -march=native"
-      - name: the DEFAULT build still carries -march=native (the default was not flipped)
-        run: |
-          set -e
-          make distclean > /dev/null 2>&1 || true
-          ./configure --enable-openmp=no > cfg2.log
-          grep -q 'accepts -march=native... yes' cfg2.log \
-            || { echo 'FAIL: the -march=native probe did not run or did not pass' >&2; exit 1; }
-          make -j"$(nproc)" > build2.log 2>&1 || { tail -40 build2.log >&2; exit 1; }
-          m=$(grep -E ' -c ' build2.log | grep -c -- '-march=native' || true)
-          [ "${m:-0}" -ge 10 ] \
-            || { echo "FAIL: default build lost -march=native ($m compile lines) -- that is a performance change nobody measured" >&2; exit 1; }
-          echo "default build: $m compile lines carried -march=native"
+# NOTE: gmp's `portable-build` job is deliberately NOT ported here. It exists because gmp's build
+# defaults to -march=native and the job verifies that a portable override actually removes it.
+# dd's configure.ac and Makefile.am contain no -march=native at all (grep: 0 hits against gmp's
+# 10), so dd's default build is already portable and there is nothing for that job to assert.
+# Porting it would have meant asserting a flag dd does not use -- CI reported exactly that as
+# "the -march=native probe did not run or did not pass". A job that asserts a false premise is
+# worse than an absent one.
 
   installer:
     # The packaged installer IS the advertised path (README: "one-command"; the install-sdpa-omp

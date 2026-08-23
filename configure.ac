@@ -14,6 +14,28 @@ AC_OPENMP
 AC_LANG([C++])
 AC_OPENMP
 
+# AC_OPENMP does NOT fail when the compiler has no OpenMP -- it records "unsupported", leaves
+# OPENMP_CXXFLAGS empty, and configure succeeds. So `--enable-openmp=yes` could produce a SERIAL
+# binary with no error and no warning, and the only signal was a missing GOMP in the linkage,
+# which a user finds only if they think to look. On macOS that is the DEFAULT outcome:
+# /usr/bin/gcc and /usr/bin/cc are both Apple clang, which has no OpenMP.
+#
+# Ported from sdpa-gmp-omp 2026-08-23. dd had no such guard, which CI's build-guards job
+# demonstrated by configuring successfully with a deliberately OpenMP-less compiler.
+AS_IF([test "x$enable_openmp" != xno],
+  [AS_IF([test "x$ac_cv_prog_cxx_openmp" = xunsupported],
+    [AC_MSG_ERROR([$CXX does not support OpenMP.
+
+Continuing would build a SERIAL solver while reporting success, which is why this is an error
+rather than a warning. On macOS /usr/bin/gcc is Apple clang and has no OpenMP -- install real GCC
+and name it explicitly:
+
+    brew install gcc
+    ./configure CC=$(ls $(brew --prefix gcc)/bin/gcc-[[0-9]]* | head -1) \
+                CXX=$(ls $(brew --prefix gcc)/bin/g++-[[0-9]]* | head -1) --enable-openmp=yes
+
+To build a serial solver deliberately, pass --disable-openmp.])])])
+
 highest_abs_top_srcdir=`cd "$srcdir" && pwd`
 
 AC_ARG_WITH(system-spooles,
