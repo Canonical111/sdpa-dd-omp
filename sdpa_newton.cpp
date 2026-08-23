@@ -412,9 +412,22 @@ void Newton::initialize_sparse_bMat(int m, IV *newToOldIV, IVL *symbfacIVL) {
         rError("Newton::initialize_sparse_bMat memory exhausted ");
     }
 
+    // Checked prefix sum. diagonalIndex[m] is the sparse bMat's stored-element count and is
+    // accumulated in int; the per-row counters are each bounded, but their SUM is not. Formed
+    // in 64-bit and refused before narrowing, naming the row where it overflowed.
     diagonalIndex[0] = 0;
-    for (i = 1; i < m + 1; i++) {
-        diagonalIndex[i] = diagonalIndex[i - 1] + counter[i - 1];
+    {
+        long long running = 0;
+        for (i = 1; i < m + 1; i++) {
+            running += (long long)counter[i - 1];
+            if (!sdpaFitsInt(running)) {
+                rError("Newton::initialize_sparse_bMat: the sparse bMat needs " << running
+                       << " stored elements by row " << i << ", past INT_MAX=" << INT_MAX
+                       << ". The dense representation is also unavailable above m=46340, so"
+                       << " this problem is too large for this build's index type.");
+            }
+            diagonalIndex[i] = (int)running;
+        }
     }
 
     // initialize sparse_bMat
@@ -520,7 +533,16 @@ void Newton::make_aggrigateIndex_SDP(InputData &inputData) {
     }
 
     for (int l = 0; l < SDP_nBlock; l++) {
-        int tmp = (inputData.SDP_nConstraint[l] + 1) * inputData.SDP_nConstraint[l] / 2;
+        // Checked: n(n+1)/2 overflows int at n >= 65536, and the reader's bounds do not
+        // forbid that count for a block. Formed in 64-bit, refused before narrowing.
+        const int n_sdp = inputData.SDP_nConstraint[l];
+        const long long tmp64_sdp = sdpaTriangularCount(n_sdp);
+        if (n_sdp < 0 || !sdpaFitsInt(tmp64_sdp)) {
+            rError("Newton::make_aggrigateIndex_SDP: block " << l << " with "
+                   << n_sdp << " constraints needs " << tmp64_sdp
+                   << " pairs, which is not representable as an int");
+        }
+        int tmp = (int)tmp64_sdp;
         rNewCheck();
         SDP_number[l] = tmp;
         SDP_constraint1[l] = new int[tmp];
@@ -619,7 +641,16 @@ void Newton::make_aggrigateIndex_SOCP(InputData &inputData) {
     }
 
     for (int l = 0; l < SOCP_nBlock; l++) {
-        int tmp = (inputData.SOCP_nConstraint[l] + 1) * inputData.SOCP_nConstraint[l] / 2;
+        // Checked: n(n+1)/2 overflows int at n >= 65536, and the reader's bounds do not
+        // forbid that count for a block. Formed in 64-bit, refused before narrowing.
+        const int n_socp = inputData.SOCP_nConstraint[l];
+        const long long tmp64_socp = sdpaTriangularCount(n_socp);
+        if (n_socp < 0 || !sdpaFitsInt(tmp64_socp)) {
+            rError("Newton::make_aggrigateIndex_SOCP: block " << l << " with "
+                   << n_socp << " constraints needs " << tmp64_socp
+                   << " pairs, which is not representable as an int");
+        }
+        int tmp = (int)tmp64_socp;
         rNewCheck();
         SOCP_number[l] = tmp;
         SOCP_constraint1[l] = new int[tmp];
@@ -718,7 +749,16 @@ void Newton::make_aggrigateIndex_LP(InputData &inputData) {
     }
 
     for (int l = 0; l < LP_nBlock; l++) {
-        int tmp = (inputData.LP_nConstraint[l] + 1) * inputData.LP_nConstraint[l] / 2;
+        // Checked: n(n+1)/2 overflows int at n >= 65536, and the reader's bounds do not
+        // forbid that count for a block. Formed in 64-bit, refused before narrowing.
+        const int n_lp = inputData.LP_nConstraint[l];
+        const long long tmp64_lp = sdpaTriangularCount(n_lp);
+        if (n_lp < 0 || !sdpaFitsInt(tmp64_lp)) {
+            rError("Newton::make_aggrigateIndex_LP: block " << l << " with "
+                   << n_lp << " constraints needs " << tmp64_lp
+                   << " pairs, which is not representable as an int");
+        }
+        int tmp = (int)tmp64_lp;
         rNewCheck();
         LP_number[l] = tmp;
         LP_constraint1[l] = new int[tmp];

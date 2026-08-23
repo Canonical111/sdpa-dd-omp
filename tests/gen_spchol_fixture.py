@@ -18,9 +18,16 @@ Deliberately NOT a physically meaningful SDP -- it exists to exercise a code pat
 generated rather than committed as data so its structure is auditable arithmetic rather than an
 opaque blob.
 """
-NBLOCK = 40      # > 5, and enough blocks that the Schur complement is genuinely sparse
-BSIZE = 4        # small blocks keep per-block constraint counts low (gate 2)
-PER_BLOCK = 3    # constraints per block -> m = 120 > 100 (gate 1)
+NBLOCK = 24      # > 5, and enough blocks that the Schur complement is genuinely sparse
+BSIZE = 8        # block order: sets how wide a Schur pivot can get (see WIDTH below)
+PER_BLOCK = 8    # constraints per block -> m = 192 > 100 (gate 1), and 8 <= 0.5*m (gate 2)
+
+# WIDTH MATTERS, and the first version of this fixture got it wrong. With 40 blocks of 3
+# constraints the Schur complement's widest pivot was 2, so the admission guard capped the team
+# at 2 and -- as the per-worker counters then showed -- exactly ONE worker ever updated the
+# factor, while `pivots_threaded` happily reported 120. A fixture that cannot occupy more than
+# one worker cannot support a `workers_used >= 2` assertion, so the constraints per block are
+# raised until the pivots are wide enough for several workers to share one.
 
 m = NBLOCK * PER_BLOCK
 print(m)

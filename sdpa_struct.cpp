@@ -469,7 +469,14 @@ void SparseMatrix::changeToDense(bool forceChange) {
     // if (false)
     // rMessage(" NonZeroCount " << NonZeroCount);
     // rMessage(" nRow*nCol*0.2 " << nRow*nCol*0.2);
-    if (forceChange == false && NonZeroCount < (nRow * nCol) * 0.20) {
+    // Checked before use, and the threshold formed in 64-bit: computing it as
+    // (nRow * nCol) * 0.20 evaluates the product in int FIRST, so on overflow the comparison
+    // is made against a wrapped (possibly negative) value.
+    if (!sdpaFitsInt(sdpaProduct(nRow, nCol))) {
+        rError("SparseMatrix::changeToDense: nRow*nCol is not representable as an int (nRow = "
+               << nRow << ", nCol = " << nCol << ")");
+    }
+    if (forceChange == false && NonZeroCount < (double)sdpaProduct(nRow, nCol) * 0.20) {
         // if the number of elements are less than 20 percent,
         // we don't change to Dense.
         return;
@@ -650,6 +657,15 @@ void DenseMatrix::initialize(int nRow, int nCol, DenseMatrix::Type type) {
 
     if (nRow <= 0 || nCol <= 0) {
         rError("DenseMatrix:: Dimensions are nonpositive");
+    }
+    /* CLASS INVARIANT, established here and relied on immediately below: on every SUCCESSFUL
+       initialize, nRow*nCol fits an int. `old_length` reads the PREVIOUS dimensions, so it is
+       safe only because they too passed this check -- a future constructor or assignment path
+       that sets nRow/nCol without coming through here would break that. Guard the new product
+       before storing it. */
+    if (!sdpaFitsInt(sdpaProduct(nRow, nCol))) {
+        rError("DenseMatrix::initialize: nRow*nCol is not representable as an int (nRow = "
+               << nRow << ", nCol = " << nCol << ")");
     }
     int old_length = this->nRow * this->nCol;
     this->nRow = nRow;

@@ -58,6 +58,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 #include <cstdio>
 #include <cmath>
 #include <stdint.h>
+#include <vector>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -88,6 +89,13 @@ namespace {
 #ifndef SDPA_DD_MIN_SPCHOL_WIDTH
 #define SDPA_DD_MIN_SPCHOL_WIDTH 8ULL /* target rows in one pivot */
 #endif
+/* Whole-factor floor: below this much total matched work, do not create a team at all.
+   PASS-THROUGH (0) by default and deliberately so -- this gate is introduced in the hardening
+   phase, and giving it a positive value here would silently stop threading factors dd threads
+   today. The value is selected by the two-architecture calibration, not here. */
+#ifndef SDPA_DD_MIN_SPCHOL_TOTAL
+#define SDPA_DD_MIN_SPCHOL_TOTAL 0ULL
+#endif
 
 // Pivot bookkeeping every thread computes identically, so the per-pivot branch cannot diverge
 // across the team and no shared array is needed.
@@ -98,7 +106,19 @@ inline unsigned long long spchol_work(int a1, int a2) {
 }
 
 // One k1 column's updates. Identical arithmetic and identical order to the original loop body.
-inline void spchol_k1(SparseMatrix &aMat, int *diagonalIndex, int k1, int indexA2) {
+/* Per-worker execution counters. `attempted` counts index comparisons in the scan, `matched`
+   counts updates actually applied. Summed per thread and reduced after the region, they answer
+   a question the pivot counter cannot: how many workers TOUCHED the factor. A dynamic
+   worksharing loop can be executed entirely by one thread while the log reports a team of 24
+   and a threaded pivot, so "pivots_threaded >= 1" is a ROUTE check, not execution proof.
+   The matched/attempted ratio is also the scan efficiency the w(w+1)/2 cost proxy assumes. */
+struct SpcholWork {
+    unsigned long long attempted;
+    unsigned long long matched;
+};
+
+inline void spchol_k1(SparseMatrix &aMat, int *diagonalIndex, int k1, int indexA2,
+                      SpcholWork *w) {
     const dd_real a = aMat.sp_ele[k1]; // row i is read-only here, so a copy is safe and cheap
     int k3 = diagonalIndex[aMat.column_index[k1]];
     const int indexB2 = diagonalIndex[aMat.column_index[k1] + 1];
@@ -108,8 +128,14 @@ inline void spchol_k1(SparseMatrix &aMat, int *diagonalIndex, int k1, int indexA
         // k3 is a MONOTONE cursor across k2 -- never reset. That keeps the search amortised and
         // is correct only because column indices ascend within a segment.
         for (; k3 < indexB2; ++k3) {
+            if (w != NULL) {
+                ++w->attempted;
+            }
             if (aMat.column_index[k3] == tmp3) {
                 aMat.sp_ele[k3] -= a * b;
+                if (w != NULL) {
+                    ++w->matched;
+                }
                 k3++;
                 break;
             }
@@ -121,13 +147,30 @@ inline void spchol_k1(SparseMatrix &aMat, int *diagonalIndex, int k1, int indexA
 // silently ignored, and it is parsed ONCE at the entry point so no code path can skip validation.
 unsigned long long spchol_gate(const char *name, unsigned long long dflt) {
     const char *e = getenv(name);
-    if (e == NULL || e[0] == '\0') {
+    if (e == NULL) {
         return dflt;
+    }
+    // Present but EMPTY is an error, not "unset". `SDPA_DD_MIN_SPCHOL_WORK="$TYPO"` is the
+    // ordinary way an empty value reaches a job script, and silently using the default there
+    // means the caller believes a gate is in force when none is.
+    if (e[0] == '\0') {
+        rError(name << " is set but empty; unset it to use the default");
+    }
+    // strtoull ACCEPTS a leading minus and WRAPS it: strtoull("-5") returns ULLONG_MAX-4 with
+    // errno unset. Demonstrated on the shipped binary before this fix --
+    // SDPA_DD_MIN_SPCHOL_WORK=-5 was accepted and became gate_work=18446744073709551611, i.e.
+    // "never parallel", while looking configured and exiting 0. Reject the sign before parsing.
+    const char *p = e;
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    if (*p == '-' || *p == '+') {
+        rError(name << " must be a non-negative integer without a sign (got \"" << e << "\")");
     }
     errno = 0;
     char *end = NULL;
-    const unsigned long long v = strtoull(e, &end, 10);
-    if (end == e || *end != '\0' || errno == ERANGE) {
+    const unsigned long long v = strtoull(p, &end, 10);
+    if (end == p || *end != '\0' || errno == ERANGE) {
         rError(name << " must be a non-negative integer (got \"" << e << "\")");
     }
     return v;
@@ -327,6 +370,7 @@ struct SpcholCfg {
     SpcholMode mode;
     unsigned long long gate_work;
     unsigned long long gate_width;
+    unsigned long long gate_total; // whole-factor floor; 0 = pass through (Phase 2 default)
     bool log;
     bool digest;      // fingerprint the finished factor
     const char *dump; // NULL, or the exact-comparison sink
@@ -340,7 +384,14 @@ const SpcholCfg &spchol_cfg() {
         c.mode = spchol_mode();
         c.gate_work = spchol_gate("SDPA_DD_MIN_SPCHOL_WORK", SDPA_DD_MIN_SPCHOL_WORK);
         c.gate_width = spchol_gate("SDPA_DD_MIN_SPCHOL_WIDTH", SDPA_DD_MIN_SPCHOL_WIDTH);
-        c.log = (getenv("SDPA_SPCHOL_LOG") != NULL);
+        c.gate_total = spchol_gate("SDPA_DD_MIN_SPCHOL_TOTAL", SDPA_DD_MIN_SPCHOL_TOTAL);
+        // "0" means OFF, matching gmp and every other flag in this fork. Until now dd treated
+        // SDPA_SPCHOL_LOG=0 as ON, because it tested only for the variable's presence -- so the
+        // documented way to turn logging off turned it on.
+        {
+            const char *le = getenv("SDPA_SPCHOL_LOG");
+            c.log = (le != NULL && le[0] != '\0' && strcmp(le, "0") != 0);
+        }
         c.digest = spchol_want_digest();
         c.dump = spchol_dump_path();
         c.mutate = spchol_mutate(); // rError()s here on a dense-route problem too, by design
@@ -827,7 +878,7 @@ bool spchol_serial(SparseMatrix &aMat, int *diagonalIndex) {
             aMat.sp_ele[k1] *= aMat.sp_ele[a1];
         }
         for (int k1 = a1 + 1; k1 < a2; ++k1) {
-            spchol_k1(aMat, diagonalIndex, k1, a2);
+            spchol_k1(aMat, diagonalIndex, k1, a2, NULL);
         }
     }
     return _SUCCESS;
@@ -848,6 +899,16 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
     const unsigned long long gate_width = cfg.gate_width;
     const bool want_log = cfg.log;
 
+#ifndef _OPENMP
+    // A forced mode must FORCE or FAIL, never silently downgrade. Until now dd ran
+    // SDPA_SPCHOL_MODE=force serially in a build without OpenMP, because `team` became 1 before
+    // dispatch -- so a benchmark that believed it was measuring the threaded path measured the
+    // serial one and said nothing. auto and serial keep the serial path, which is what they mean.
+    if (mode == SPCHOL_FORCE) {
+        rError("SDPA_SPCHOL_MODE=force was requested but this binary was built without OpenMP,"
+               " so there is no parallel path to take");
+    }
+#endif
     if (mode == SPCHOL_LEGACY) {
         // The oracle arm: no team, no gates, no shared kernel. Taken before any OpenMP
         // decision so that what it factors cannot depend on the threading configuration.
@@ -857,8 +918,56 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
         return spchol_finish(aMat, diagonalIndex, aMat.nRow, cfg,
                              spchol_legacy(aMat, diagonalIndex));
     }
+    // Whole-factor admission, decided ONCE and on the FINAL team size. Four guards, none of
+    // which changes results -- the threading is bit-identical by construction, so these only
+    // decide whether and how widely to fork.
+    unsigned long long total_work = 0;
+    int useful_width = 0;
+    {
+        const int nrows = aMat.nRow;
+        for (int i = 0; i < nrows; ++i) {
+            const int a1 = diagonalIndex[i], a2 = diagonalIndex[i + 1];
+            const unsigned long long w = spchol_work(a1, a2);
+            // Saturating: total_work only gates a decision, so clamping at the maximum is
+            // both safe and the conservative direction (it can only admit, never refuse).
+            if (total_work > ULLONG_MAX - w) {
+                total_work = ULLONG_MAX;
+            } else {
+                total_work += w;
+            }
+            if (spchol_width(a1, a2) > useful_width) {
+                useful_width = spchol_width(a1, a2);
+            }
+        }
+    }
 #ifdef _OPENMP
-    const int team = (mode == SPCHOL_SERIAL) ? 1 : omp_get_max_threads();
+    int team = (mode == SPCHOL_SERIAL) ? 1 : omp_get_max_threads();
+    if (mode != SPCHOL_SERIAL) {
+        // (1) OMP_THREAD_LIMIT is a hard ceiling the runtime will enforce anyway; asking for
+        //     more just means the team we reason about is not the team we get.
+        const int tl = omp_get_thread_limit();
+        if (tl > 0 && tl < team) {
+            team = tl;
+        }
+        // (2) Never request more threads than the widest pivot can occupy. A factor whose
+        //     widest pivot is 4 gains nothing from a team of 24 and pays 24-way barriers.
+        if (useful_width < team) {
+            team = useful_width;
+        }
+        // (3) Nesting. omp_get_level() rather than omp_in_parallel(): an inactive or serialized
+        //     enclosing region reports false for in_parallel() while still raising the level,
+        //     and a nested team here is not something this routine is validated for. gmp records
+        //     losing 7.7x on gpp124-1 to exactly this.
+        if (omp_get_level() != 0) {
+            team = 1;
+        }
+        // (4) Whole-factor floor. Introduced with a PASS-THROUGH default of 0 so this phase
+        //     cannot silently refuse to thread factors dd admits today; a positive value is
+        //     chosen only by the two-architecture sweep.
+        if (mode != SPCHOL_FORCE && total_work < cfg.gate_total) {
+            team = 1;
+        }
+    }
 #else
     const int team = 1;
 #endif
@@ -878,10 +987,17 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
     bool one_thread = false, one_thread_r = false;
     unsigned long long pivots_par = 0, pivots_seq = 0;
     int actual = 1, max_width = 0;
+    // One slot per REQUESTED thread; the region writes only its own index, so no sharing and
+    // no reduction clause is needed. Sized on `team` because that is what num_threads asks for.
+    std::vector<SpcholWork> per_thread((size_t)(team > 0 ? team : 1));
+    for (size_t wi = 0; wi < per_thread.size(); ++wi) {
+        per_thread[wi].attempted = 0;
+        per_thread[wi].matched = 0;
+    }
 
 #pragma omp parallel num_threads(team) default(none)                                        \
     shared(aMat, diagonalIndex, fail, failed_pivot, one_thread, one_thread_r,               \
-           pivots_par, pivots_seq, actual, max_width)                                        \
+           pivots_par, pivots_seq, actual, max_width, per_thread)                            \
     firstprivate(nDIM, force, gate_work, gate_width)
     {
         // THE team, read inside the region that owns it. num_threads() is a REQUEST: OMP_DYNAMIC
@@ -893,6 +1009,8 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
         // different path and the worksharing constructs below are encountered by all of them in
         // the same order. With one thread, that thread runs the untouched serial routine.
         const int here = omp_get_num_threads();
+        const int me = omp_get_thread_num();
+        SpcholWork *mywork = ((size_t)me < per_thread.size()) ? &per_thread[(size_t)me] : NULL;
         if (here < 2) {
             one_thread = true;
             one_thread_r = spchol_serial(aMat, diagonalIndex);
@@ -937,7 +1055,7 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
                     }
 #pragma omp for schedule(dynamic)
                     for (int k1 = a1 + 1; k1 < a2; ++k1)
-                        spchol_k1(aMat, diagonalIndex, k1, a2);
+                        spchol_k1(aMat, diagonalIndex, k1, a2, mywork);
                     // implicit barrier: pivot i completes before i+1 begins. NEVER nowait.
                 } else {
                     // Too small to share out. One thread does it; the end barrier is retained so
@@ -946,7 +1064,7 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
                     {
                         pivots_seq++;
                         for (int k1 = a1 + 1; k1 < a2; ++k1)
-                            spchol_k1(aMat, diagonalIndex, k1, a2);
+                            spchol_k1(aMat, diagonalIndex, k1, a2, mywork);
                     }
                 }
             }
@@ -962,9 +1080,25 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
     if (want_log) {
         // Non-vacuity evidence: a caller can see whether any pivot actually ran threaded, rather
         // than inferring it from a wall-clock difference.
-        rMessage("spchol: team=" << actual << " pivots_threaded=" << pivots_par
+        // WORKERS that touched the factor, not merely pivots that entered the workshared arm.
+        // A dynamic loop can be run entirely by one thread while `actual` reports the full team,
+        // so workers_used is the figure a non-vacuity assertion must key on.
+        int workers_used = 0;
+        unsigned long long tot_att = 0, tot_mat = 0;
+        for (size_t wi = 0; wi < per_thread.size(); ++wi) {
+            if (per_thread[wi].matched > 0) {
+                workers_used++;
+            }
+            tot_att += per_thread[wi].attempted;
+            tot_mat += per_thread[wi].matched;
+        }
+        rMessage("spchol: team=" << actual << " workers that updated " << workers_used
+                                << " pivots_threaded=" << pivots_par
                                 << " pivots_serial=" << pivots_seq << " max_width=" << max_width
-                                << " gate_work=" << gate_work << " gate_width=" << gate_width);
+                                << " matched=" << tot_mat << " attempted=" << tot_att
+                                << " scan_ratio=" << (tot_mat ? (double)tot_att / (double)tot_mat : 0.0)
+                                << " gate_work=" << gate_work << " gate_width=" << gate_width
+                                << " gate_total=" << cfg.gate_total);
     }
     if (fail) {
         rMessage("sparse cholesky miss condition :: not positive definite"
@@ -2269,8 +2403,14 @@ bool Lal::multiply(DenseLinearSpace &retMat, DenseLinearSpace &aMat, dd_real *sc
     if (retMat.LP_nBlock != aMat.LP_nBlock) {
         rError("multiply:: different memory size");
     }
+    /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: scalar defaults to NULL in the
+       declaration (sdpa_linear.h) and this branch dereferenced it unconditionally. Every
+       in-tree LP caller happens to pass one, so the defect is latent rather than live -- but
+       the API contract said otherwise, and the dense paths in this same file already treat
+       NULL as "no scaling". Ported from gmp. See git log. */
     for (int l = 0; l < aMat.LP_nBlock; ++l) {
-        retMat.LP_block[l] = aMat.LP_block[l] * (*scalar);
+        retMat.LP_block[l] = (scalar == NULL) ? aMat.LP_block[l]
+                                              : aMat.LP_block[l] * (*scalar);
     }
 
     return total_judge;

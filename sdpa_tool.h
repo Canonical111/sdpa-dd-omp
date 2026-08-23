@@ -33,6 +33,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 #include <iostream>
 #include <string>
 #include <cstdlib>
+#include <climits>
 
 #include <qd/dd_real.h>
 #include <chrono>
@@ -44,10 +45,39 @@ namespace sdpa {
     cout << message << " :: line " << __LINE__ \
          << " in " << __FILE__ << endl
 
-#define rError(message) \
-    cout << message << " :: line " << __LINE__ \
-         << " in " << __FILE__ << endl; \
-    exit(EXIT_FAILURE)
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: wrapped in do{}while(0). As two bare
+   statements the macro was not statement-safe: `if (cond) rError(...);` without braces prints
+   under the condition and then exits UNCONDITIONALLY, because the exit is a second statement
+   outside the if. No such call site exists in the tree today -- this is a trap, not a live bug --
+   which is exactly why it is fixed at the macro rather than at a call site. See git log. */
+#define rError(message)                                \
+    do {                                               \
+        cout << message << " :: line " << __LINE__     \
+             << " in " << __FILE__ << endl;            \
+        exit(EXIT_FAILURE);                            \
+    } while (0)
+
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: checked size arithmetic.
+
+   Three helpers, used at EVERY site that forms a size from input-derived quantities. They live
+   here, in production code, so the unit tests can call the same symbols the allocations use --
+   a test that reimplements `(a*b > INT_MAX)` proves the test author can write a guard, not that
+   the allocation is guarded.
+
+   Products are formed in `long long` and compared exactly against INT_MAX. gmp uses a `double`
+   product for the two matrix guards; both dimensions here are non-negative `int`, so an exact
+   64-bit comparison is simpler and does not put a floating-point approximation in the way of an
+   integer invariant. See git log. */
+// n(n+1)/2 -- the triangular pair count. Overflows int at n >= 65536.
+inline long long sdpaTriangularCount(int n) {
+    return ((long long)n + 1LL) * (long long)n / 2LL;
+}
+
+// Exact product; callers compare against INT_MAX before narrowing.
+inline long long sdpaProduct(int a, int b) { return (long long)a * (long long)b; }
+
+// True when the value fits an int and is non-negative.
+inline bool sdpaFitsInt(long long v) { return v >= 0 && v <= (long long)INT_MAX; }
 
 #define rNewCheck() ;
 
