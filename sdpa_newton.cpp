@@ -29,6 +29,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 #endif
 
 #include <climits>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -81,6 +82,55 @@ static bool bmat_test_f2_stale() {
     rError("SDPA_BMAT_TEST_F2_STALE must be 0 or 1 (got \"" << e << "\")");
     return false;
 #endif
+}
+
+/* TEST-ONLY negative control for the assembly oracle, behind the spchol test gate.
+
+   Perturbs ONE assembled element by one ulp of its low limb. Without it, "every thread count
+   produced the same stream" is equally consistent with a stream that cannot tell anything
+   apart -- and this fork has now shipped two comparisons that could not fail. The low limb is
+   chosen because it is invisible to every printed field and visible only to a comparison over
+   the actual bits, which is the property being claimed. */
+static bool bmat_asm_mutate() {
+    const char *e = getenv("SDPA_BMAT_ASM_MUTATE");
+    if (e == NULL || e[0] == '\0' || strcmp(e, "0") == 0) {
+        return false;
+    }
+#ifndef SDPA_SPCHOL_TEST_HOOKS
+    rError("SDPA_BMAT_ASM_MUTATE is a test hook and this binary was not built with"
+           " -DSDPA_SPCHOL_TEST_HOOKS, so the hook does not exist here");
+    return false;
+#else
+    if (strcmp(e, "1") == 0) {
+        return true;
+    }
+    rError("SDPA_BMAT_ASM_MUTATE must be 0 or 1 (got \"" << e << "\")");
+    return false;
+#endif
+}
+
+static bool bmat_asm_digest_wanted() {
+    const char *e = getenv("SDPA_BMAT_ASM_DIGEST");
+    if (e == NULL || e[0] == '\0' || strcmp(e, "0") == 0) {
+        return false;
+    }
+    if (strcmp(e, "1") == 0) {
+        return true;
+    }
+    rError("SDPA_BMAT_ASM_DIGEST must be 0 or 1 (got \"" << e << "\")");
+    return false;
+}
+
+// Exact-comparison sink, APPENDED to, so one file holds every assembly of a solve in order and
+// two runs compare with cmp(1) -- byte identity of the whole stream, not equality of a hash.
+// Openability is validated at configuration time (Make_bMat), not here, so that a dense-route
+// problem cannot accept an unwritable path in silence.
+static const char *bmat_asm_dump_path() {
+    const char *e = getenv("SDPA_BMAT_ASM_DUMP");
+    if (e == NULL || e[0] == '\0') {
+        return NULL;
+    }
+    return e;
 }
 
 static bool bmat_asm_profile_wanted() {
@@ -1417,6 +1467,70 @@ void Newton::compute_bMat_dense_SDP(InputData &inputData, Solutions &currentPt, 
 
    Also the eligibility census the assembly-threading work needs: group count, largest group,
    and the formula mix decide whether parallelising over i-groups can balance at all. See git log. */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: the ASSEMBLY's own canonical stream.
+
+   The assembled sparse bMat, serialised with the same framing the factor stream uses (shared
+   writer in sdpa_linear.cpp) but its OWN TAG, so an assembly stream can never compare equal to
+   a factor stream by accident. This is the oracle the Phase-4 threading will be judged by, and
+   it exists BEFORE that threading deliberately: the previous port shipped its parallelism
+   first and its factor oracle months later, which is how "byte-identical" came to mean one
+   printed line for a whole release.
+
+   Emitting the assembly's own stream rather than inferring identity from the factor's is not
+   fussiness: the factor is computed FROM the assembled matrix, so a Cholesky that happened to
+   be insensitive to a small assembly error would mask it. See git log. */
+void Newton::emit_bMat_stream(FILE *dump, bool want_fingerprint) {
+    CanonicalStream d;
+    canonicalInit(d, dump);
+    const char *tag = "DDBMATASMv1"; // never equal to the factor stream's DDSPCHOLv1
+    canonicalBytes(d, tag, strlen(tag));
+    canonicalI64(d, (long long)bMat_type);
+    if (bMat_type == SPARSE) {
+        canonicalI64(d, sparse_bMat.nRow);
+        canonicalI64(d, sparse_bMat.nCol);
+        canonicalI64(d, sparse_bMat.NonZeroNumber);
+        canonicalI64(d, sparse_bMat.NonZeroCount);
+        canonicalU64(d, (uint64_t)sparse_bMat.NonZeroCount);
+        for (int k = 0; k < sparse_bMat.NonZeroCount; ++k) {
+            canonicalByte(d, 'E'); // record tag
+            canonicalI64(d, k);
+            canonicalI64(d, sparse_bMat.row_index[k]);
+            canonicalI64(d, sparse_bMat.column_index[k]);
+            // Both IEEE limbs: a dd_real IS its 128 bits, so no formatting step is involved.
+            canonicalDouble(d, sparse_bMat.sp_ele[k].x[0]);
+            canonicalDouble(d, sparse_bMat.sp_ele[k].x[1]);
+            d.records++;
+        }
+    } else {
+        canonicalI64(d, bMat.nRow);
+        canonicalI64(d, bMat.nCol);
+        const long long n = sdpaProduct(bMat.nRow, bMat.nCol);
+        canonicalU64(d, (uint64_t)n);
+        for (long long k = 0; k < n; ++k) {
+            canonicalByte(d, 'D');
+            canonicalI64(d, k);
+            canonicalDouble(d, bMat.de_ele[k].x[0]);
+            canonicalDouble(d, bMat.de_ele[k].x[1]);
+            d.records++;
+        }
+    }
+    canonicalByte(d, '.'); // terminator, so a truncated stream cannot look complete
+    if (d.io_error) {
+        rError("SDPA_BMAT_ASM_DUMP: writing failed after " << (unsigned long long)d.bytes
+               << " bytes. The dump is truncated, so any comparison against it would be"
+               << " meaningless; failing rather than leaving a file that looks complete.");
+    }
+    if (want_fingerprint) {
+        // Counts printed alongside the fingerprint deliberately: equality of a 64-bit hash is
+        // strong evidence, not proof, and two streams of different length or record count are
+        // not the same matrix whatever their hashes do.
+        printf("bmat assembly    : %llu records, %llu stream bytes, fingerprint %016llx\n",
+               (unsigned long long)d.records, (unsigned long long)d.bytes,
+               (unsigned long long)d.fnv);
+        fflush(stdout);
+    }
+}
+
 void Newton::census_bMat_sparse_SDP(InputData &inputData, FILE *fp) {
     const int SDP_nBlock_local = inputData.SDP_nBlock;
     long long tot_pairs = 0, tot_groups = 0, tot_f2dense_after = 0, tot_f2dense_total = 0;
@@ -1669,6 +1783,18 @@ void Newton::Make_bMat(InputData &inputData, Solutions &currentPt, WorkVariables
             asm_cfg_done = true;
             (void)bmat_asm_census_wanted();
             (void)bmat_asm_profile_wanted();
+            (void)bmat_asm_digest_wanted();
+            (void)bmat_asm_mutate();
+            {
+                const char *dp = bmat_asm_dump_path();
+                if (dp != NULL) {
+                    FILE *probe = fopen(dp, "ab");
+                    if (probe == NULL) {
+                        rError("SDPA_BMAT_ASM_DUMP: cannot open \"" << dp << "\" for append");
+                    }
+                    fclose(probe);
+                }
+            }
             (void)bmat_test_f2_stale();
         }
     }
@@ -1719,6 +1845,38 @@ void Newton::Make_bMat(InputData &inputData, Solutions &currentPt, WorkVariables
     // sparse_bMat.display();
     TimeEnd(END3);
     com.makebMat += TimeCal(START3, END3);
+
+    // The assembly oracle. Off unless asked for: O(nnz) work is fine for a fixture and not
+    // something to pay for in a solve.
+    {
+        const char *dumpf = bmat_asm_dump_path();
+        const bool want_fp = bmat_asm_digest_wanted();
+        if (bmat_asm_mutate()) {
+            // One ulp on the low limb of the middle stored element.
+            if (bMat_type == SPARSE && sparse_bMat.NonZeroCount > 0) {
+                double &lo = sparse_bMat.sp_ele[sparse_bMat.NonZeroCount / 2].x[1];
+                lo = nextafter(lo, HUGE_VAL);
+            } else if (bMat_type != SPARSE && bMat.nRow > 0) {
+                double &lo = bMat.de_ele[(sdpaProduct(bMat.nRow, bMat.nCol)) / 2].x[1];
+                lo = nextafter(lo, HUGE_VAL);
+            }
+        }
+        if (dumpf != NULL || want_fp) {
+            FILE *dump = NULL;
+            if (dumpf != NULL) {
+                dump = fopen(dumpf, "ab");
+                if (dump == NULL) {
+                    rError("SDPA_BMAT_ASM_DUMP: cannot open \"" << dumpf << "\" for append");
+                }
+            }
+            emit_bMat_stream(dump, want_fp);
+            if (dump != NULL) {
+                if (fflush(dump) != 0 || ferror(dump) != 0 || fclose(dump) != 0) {
+                    rError("SDPA_BMAT_ASM_DUMP: writing \"" << dumpf << "\" failed");
+                }
+            }
+        }
+    }
 }
 
 // nakata 2004/12/01

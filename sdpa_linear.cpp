@@ -65,6 +65,63 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 namespace sdpa {
 
+// ------------------------------------------------------ the canonical stream facility
+// Declared in sdpa_linear.h. Defined here, at namespace scope rather than in the anonymous
+// namespace, because the sparse bMat assembly in sdpa_newton.cpp emits the same framing for a
+// different structure and MUST use the same writer -- two implementations of "the same" stream
+// is exactly how two structures come to compare equal without being equal.
+
+void canonicalInit(CanonicalStream &d, FILE *dump) {
+    d.fnv = 14695981039346656037ULL; // the FNV-1a offset basis
+    d.records = 0;
+    d.bytes = 0;
+    d.dump = dump;
+    d.io_error = false;
+}
+
+void canonicalByte(CanonicalStream &d, unsigned char c) {
+    d.fnv ^= (uint64_t)c;
+    d.fnv *= 1099511628211ULL;
+    d.bytes++;
+    if (d.dump != NULL && !d.io_error) {
+        // Checked, because `bytes` counts what was ATTEMPTED. A disk-full or quota error would
+        // otherwise leave a truncated dump while the log reported a full-length stream, and a
+        // comparison against a truncated file is not a comparison.
+        if (fputc((int)c, d.dump) == EOF) {
+            d.io_error = true;
+        }
+    }
+}
+
+void canonicalU64(CanonicalStream &d, uint64_t v) {
+    // Explicit little-endian order, unsigned throughout: shifting a signed value right is
+    // implementation-defined for negatives, and an implicit host byte order would make the
+    // stream non-portable between machines that are supposed to produce identical bytes.
+    for (int b = 0; b < 8; ++b) {
+        canonicalByte(d, (unsigned char)((v >> (8 * b)) & 0xffU));
+    }
+}
+
+void canonicalI64(CanonicalStream &d, long long v) {
+    canonicalU64(d, (uint64_t)v); // two's complement, well defined as a conversion
+}
+
+void canonicalBytes(CanonicalStream &d, const char *p, size_t n) {
+    canonicalU64(d, (uint64_t)n); // the length frame
+    for (size_t i = 0; i < n; ++i) {
+        canonicalByte(d, (unsigned char)p[i]);
+    }
+}
+
+void canonicalDouble(CanonicalStream &d, double x) {
+    // memcpy rather than a union or a pointer cast: type-punning through either is undefined,
+    // and this is the one place where getting the bits wrong would silently weaken every
+    // comparison built on them.
+    uint64_t bits = 0;
+    memcpy(&bits, &x, sizeof bits);
+    canonicalU64(d, bits);
+}
+
 namespace {
 
 // CALIBRATED on dd, 2026-08-23, not inherited from gmp and not a guess. Swept on dE3 (m=6067)
@@ -228,90 +285,42 @@ SpcholMode spchol_mode() {
 //
 // Off unless asked for -- O(nnz) work is fine for a fixture and not something to pay for in a
 // solve.
-struct SpcholDigest {
-    uint64_t fnv;     // FNV-1a over the framed stream
-    uint64_t records; // elements emitted
-    uint64_t bytes;   // length of the framed stream
-    FILE *dump;       // optional exact-comparison sink; NULL to only fingerprint
-    bool io_error;    // a write failed, so what is on disk is NOT what `bytes` claims
-};
-
-void spchol_dg_byte(SpcholDigest &d, unsigned char c) {
-    d.fnv ^= (uint64_t)c;
-    d.fnv *= 1099511628211ULL;
-    d.bytes++;
-    if (d.dump != NULL && !d.io_error) {
-        // Checked, because `bytes` counts what was ATTEMPTED. A disk-full or quota error would
-        // otherwise leave a truncated dump while the log reported a full-length stream, and a
-        // comparison against a truncated file is not a comparison.
-        if (fputc((int)c, d.dump) == EOF)
-            d.io_error = true;
-    }
-}
-
-void spchol_dg_u64(SpcholDigest &d, uint64_t v) {
-    // Explicit little-endian byte order, and unsigned throughout: shifting a signed value right
-    // is implementation-defined for negatives, and an implicit host byte order would make the
-    // stream non-portable between machines that are supposed to produce identical bytes.
-    for (int b = 0; b < 8; ++b)
-        spchol_dg_byte(d, (unsigned char)((v >> (8 * b)) & 0xffU));
-}
-
-void spchol_dg_i64(SpcholDigest &d, long long v) {
-    spchol_dg_u64(d, (uint64_t)v); // two's complement, well defined as a conversion
-}
-
-void spchol_dg_bytes(SpcholDigest &d, const char *p, size_t n) {
-    spchol_dg_u64(d, (uint64_t)n); // the length frame
-    for (size_t i = 0; i < n; ++i)
-        spchol_dg_byte(d, (unsigned char)p[i]);
-}
-
-// The exact value of a double, as its IEEE-754 bit pattern. memcpy rather than a union or a
-// pointer cast: type-punning through either is undefined, and this is the one place where
-// getting the bits wrong would silently weaken every comparison built on them.
-void spchol_dg_double(SpcholDigest &d, double x) {
-    uint64_t bits = 0;
-    memcpy(&bits, &x, sizeof bits);
-    spchol_dg_u64(d, bits);
-}
+// The stream type and its writers now live in namespace sdpa (sdpa_linear.h) so the bMat
+// ASSEMBLY can emit the same bytes from the same code. This file keeps the factor's producer.
+typedef CanonicalStream SpcholDigest;
 
 SpcholDigest spchol_digest(SparseMatrix &aMat, int *diagonalIndex, int nDIM, FILE *dump) {
     SpcholDigest d;
-    d.fnv = 14695981039346656037ULL; // the FNV-1a offset basis
-    d.records = 0;
-    d.bytes = 0;
-    d.dump = dump;
-    d.io_error = false;
+    canonicalInit(d, dump);
 
     // Header record: STRUCTURE first. A factor with the same values in a different sparsity
     // pattern is a different factor, and a digest over values alone would call the two equal.
     const char *tag = "DDSPCHOLv1"; // dd's own tag: a dd stream must never compare equal to gmp's
-    spchol_dg_bytes(d, tag, strlen(tag));
-    spchol_dg_i64(d, (long long)aMat.type);
-    spchol_dg_i64(d, aMat.nRow);
-    spchol_dg_i64(d, aMat.nCol);
-    spchol_dg_i64(d, aMat.NonZeroNumber);
-    spchol_dg_i64(d, aMat.NonZeroCount);
-    spchol_dg_i64(d, aMat.NonZeroEffect);
-    spchol_dg_i64(d, nDIM);
-    spchol_dg_u64(d, (uint64_t)(nDIM + 1));
+    canonicalBytes(d, tag, strlen(tag));
+    canonicalI64(d, (long long)aMat.type);
+    canonicalI64(d, aMat.nRow);
+    canonicalI64(d, aMat.nCol);
+    canonicalI64(d, aMat.NonZeroNumber);
+    canonicalI64(d, aMat.NonZeroCount);
+    canonicalI64(d, aMat.NonZeroEffect);
+    canonicalI64(d, nDIM);
+    canonicalU64(d, (uint64_t)(nDIM + 1));
     for (int i = 0; i <= nDIM; ++i)
-        spchol_dg_i64(d, diagonalIndex[i]);
+        canonicalI64(d, diagonalIndex[i]);
 
-    spchol_dg_u64(d, (uint64_t)aMat.NonZeroCount);
+    canonicalU64(d, (uint64_t)aMat.NonZeroCount);
     for (int k = 0; k < aMat.NonZeroCount; ++k) {
-        spchol_dg_byte(d, 'E'); // record tag
-        spchol_dg_i64(d, k);
-        spchol_dg_i64(d, aMat.row_index[k]);
-        spchol_dg_i64(d, aMat.column_index[k]);
+        canonicalByte(d, 'E'); // record tag
+        canonicalI64(d, k);
+        canonicalI64(d, aMat.row_index[k]);
+        canonicalI64(d, aMat.column_index[k]);
         // Both limbs, high then low. The low limb is the whole point: a reordered summation
         // changes it long before it changes anything the solver prints.
-        spchol_dg_double(d, aMat.sp_ele[k].x[0]);
-        spchol_dg_double(d, aMat.sp_ele[k].x[1]);
+        canonicalDouble(d, aMat.sp_ele[k].x[0]);
+        canonicalDouble(d, aMat.sp_ele[k].x[1]);
         d.records++;
     }
-    spchol_dg_byte(d, '.'); // terminator, so a truncated stream cannot look complete
+    canonicalByte(d, '.'); // terminator, so a truncated stream cannot look complete
     return d;
 }
 

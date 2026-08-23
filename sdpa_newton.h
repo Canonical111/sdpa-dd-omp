@@ -142,6 +142,8 @@ class Newton {
     void compute_bMat_sparse_SDP(InputData &inputData, Solutions &currentPt, WorkVariables &work, ComputeTime &com);
     // Eligibility/behaviour census for the sparse assembly; see sdpa_newton.cpp.
     void census_bMat_sparse_SDP(InputData &inputData, FILE *fp);
+    // The assembly's own canonical stream -- the oracle for the Phase-4 threading.
+    void emit_bMat_stream(FILE *dump, bool want_fingerprint);
 
     void compute_bMat_dense_SOCP(InputData &inputData, Solutions &currentPt, WorkVariables &work, ComputeTime &com);
 

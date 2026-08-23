@@ -24,6 +24,9 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 #include <sdpa_struct.h>
 
+#include <cstdio>
+#include <stdint.h>
+
 namespace sdpa {
 
 class Lal {
@@ -166,6 +169,42 @@ class Lal {
     // ret = inner_product(a,b) // op = '.'
     static bool let(dd_real &ret, const char eq, DenseLinearSpace &aMat, const char op, SparseLinearSpace &bMat);
 };
+
+
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: the canonical stream facility.
+
+   A canonical, LENGTH-FRAMED byte stream, used to prove that two computations produced the
+   same data structure. It began as a file-local struct in sdpa_linear.cpp serving only the
+   sparse Cholesky's factor dump; the sparse bMat assembly needs the SAME framing for a
+   DIFFERENT structure, and gmp's header is explicit that the assembly must emit its own stream
+   rather than infer identity from the factor's -- so the writer moves here and each producer
+   supplies its own tag.
+
+   Framing is the point. Without an explicit length before every variable-length field the
+   concatenations ("ab","c") and ("a","bc") produce the same bytes, so two different structures
+   could compare equal. Every field carries its length and every record a tag.
+
+   Two outputs, answering different questions:
+     - the 64-bit FNV-1a fingerprint: cheap, enough to DETECT a change, and a fingerprint
+       rather than a proof -- described that way wherever it is printed;
+     - the dump: the stream itself, compared with cmp(1). That is the proof-grade comparison.
+   See git log. */
+struct CanonicalStream {
+    uint64_t fnv;     // FNV-1a over the framed stream
+    uint64_t records; // records emitted
+    uint64_t bytes;   // length of the framed stream
+    FILE *dump;       // optional exact-comparison sink; NULL to only fingerprint
+    bool io_error;    // a write failed, so what is on disk is NOT what `bytes` claims
+};
+
+void canonicalInit(CanonicalStream &d, FILE *dump);
+void canonicalByte(CanonicalStream &d, unsigned char c);
+void canonicalU64(CanonicalStream &d, uint64_t v);
+void canonicalI64(CanonicalStream &d, long long v);
+void canonicalBytes(CanonicalStream &d, const char *p, size_t n);
+// A double by its exact IEEE-754 bit pattern. dd_real is a pair of these, so a dd value IS
+// its 128 bits: no string conversion, no rounding, nothing to reason about.
+void canonicalDouble(CanonicalStream &d, double x);
 
 } // namespace sdpa
 
