@@ -25,6 +25,9 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 #include <sdpa_chordal.h>
 
+#include <cstdlib>
+#include <cstring>
+
 namespace sdpa {
 
 Chordal::Chordal() { initialize(); }
@@ -345,27 +348,107 @@ int Chordal::Spooles_MS(int m) {
     return nonzeros * 2 - m;
 }
 
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: adds SDPA_BMAT_MODE, an explicit and
+   strictly-parsed route selector, and decouples gate 2 from gate 3's constant under the opt-in
+   `fill` policy. Ported from sdpa-gmp-omp; see review/GATE3-DECISION-RULE-FINAL-REPORT.md and
+   review/DD-PORT-PLAN-2026-08-23.md in the recipe repo.
+
+   `auto` IS THE DEFAULT AND ITS SEMANTICS ARE SOURCE-PRESERVED: every per-mode cutoff below is a
+   ternary whose auto arm is the released expression verbatim, so an unset SDPA_BMAT_MODE takes
+   exactly the decisions it took before this commit.
+
+   WHY `fill` IS OPT-IN RATHER THAN THE DEFAULT. Under `auto`, gate 3 rejects on aggregate density
+   > 0.25 and gate 4 on ordered fill > 0.40, so gate 3 is strictly the stricter test and problems
+   with aggregate in (0.25, 0.40] never reach gate 4. `fill` demotes gate 3 to gate 4's own
+   constant, which is sound because symbolic factorisation only ADDS entries -- aggregate > F
+   proves fill > F -- so the early exit cannot change gate 4's verdict, only skip work.
+   The route census in review/artifacts/gate3/ says what that costs and buys, and its ROUTE data
+   transfers across precisions because these gates read only structure:
+     SDPLIB     92 instances:   0 change route (84 decided at gate 1, 6 at gate 2)
+     bootstrap 221 instances: 167 change DENSE -> SPARSE, across 7 structures
+   Measured on dd (dE3, m=6067, 24 threads, calibrated spchol gates): dense 22.56 s / 671 MB
+   against sparse 6.54 s / 277 MB, i.e. 3.45x faster and 2.42x less memory -- but only because
+   the sparse Cholesky is now threaded. Promoting this to the default is a separate decision that
+   wants dd-side timings for the other six switch structures first. */
+
+namespace {
+
+enum BMatMode { BMAT_AUTO, BMAT_FILL, BMAT_DENSE, BMAT_SPARSE };
+
+// Gate 2's own constant. Under `auto` it stays coupled to aggregate_threshold via sqrt(), exactly
+// as upstream wrote it; under `fill` it is this number instead, which has the SAME value (0.5)
+// but is no longer moved by retuning gate 3. That coupling is why gate 3 could not be retuned
+// without silently changing gate 2.
+const double BMAT_FILL_BLOCK_FRACTION = 0.5;
+
+BMatMode bmat_mode() {
+    const char *e = getenv("SDPA_BMAT_MODE");
+    if (e == NULL || e[0] == '\0' || strcmp(e, "auto") == 0) {
+        return BMAT_AUTO;
+    }
+    if (strcmp(e, "fill") == 0) {
+        return BMAT_FILL;
+    }
+    if (strcmp(e, "dense") == 0) {
+        return BMAT_DENSE;
+    }
+    if (strcmp(e, "sparse") == 0) {
+        return BMAT_SPARSE;
+    }
+    // Strict: a typo must not silently select the default, which is the very route a caller
+    // setting this variable is usually trying to select against.
+    rError("SDPA_BMAT_MODE must be auto, fill, dense or sparse (got \"" << e << "\")");
+    return BMAT_AUTO;
+}
+
+} // namespace
+
 void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut) {
-    if ((m <= m_threshold) || (nBlock <= b_threshold)) {
+    const BMatMode mode = bmat_mode();
+    const bool want_log = (getenv("SDPA_BMAT_LOG") != NULL);
+    // Gate 2's cutoff: auto's expression verbatim, or fill's own decoupled constant.
+    const double g2 = (mode == BMAT_FILL) ? (BMAT_FILL_BLOCK_FRACTION * m)
+                                          : (m * sqrt(aggregate_threshold));
+    // Gate 3's cutoff: auto's 0.25, or fill's demotion to gate 4's own F.
+    const double g3 = (mode == BMAT_FILL) ? (extend_threshold * m * (double)m)
+                                          : (aggregate_threshold * m * (double)m);
+
+    if (mode == BMAT_DENSE) {
+        if (want_log)
+            rMessage("bmat: mode=dense (forced) -> DENSE");
         best = -1;
         return;
     }
-    for (int b = 0; b < inputData.SDP_nBlock; b++) {
-        if (inputData.SDP_nConstraint[b] > m * sqrt(aggregate_threshold)) {
+    if (mode != BMAT_SPARSE) {
+        if ((m <= m_threshold) || (nBlock <= b_threshold)) {
+            if (want_log)
+                rMessage("bmat: gate1 m=" << m << " nBlock=" << nBlock << " -> DENSE");
             best = -1;
             return;
         }
-    }
-    for (int b = 0; b < inputData.SOCP_nBlock; b++) {
-        if (inputData.SOCP_nConstraint[b] > m * sqrt(aggregate_threshold)) {
-            best = -1;
-            return;
+        for (int b = 0; b < inputData.SDP_nBlock; b++) {
+            if (inputData.SDP_nConstraint[b] > g2) {
+                if (want_log)
+                    rMessage("bmat: gate2 SDP block " << b << " -> DENSE");
+                best = -1;
+                return;
+            }
         }
-    }
-    for (int b = 0; b < inputData.LP_nBlock; b++) {
-        if (inputData.LP_nConstraint[b] > m * sqrt(aggregate_threshold)) {
-            best = -1;
-            return;
+        for (int b = 0; b < inputData.SOCP_nBlock; b++) {
+            if (inputData.SOCP_nConstraint[b] > g2) {
+                if (want_log)
+                    rMessage("bmat: gate2 SOCP block " << b << " -> DENSE");
+                best = -1;
+                return;
+            }
+        }
+        for (int b = 0; b < inputData.LP_nBlock; b++) {
+            if (inputData.LP_nConstraint[b] > g2) {
+                if (want_log)
+                    rMessage("bmat: gate2 LP block " << b << " -> DENSE");
+                best = -1;
+                return;
+            }
         }
     }
 
@@ -374,7 +457,11 @@ void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut
 
     makeGraph(inputData, m);
 
-    if (IVL_tsize(adjIVL) > aggregate_threshold * m * m) {
+    if (mode != BMAT_SPARSE && IVL_tsize(adjIVL) > g3) {
+        if (want_log)
+            rMessage("bmat: gate3 aggregate=" << IVL_tsize(adjIVL) << " cutoff=" << g3
+                                              << (mode == BMAT_FILL ? " [fill policy]" : "")
+                                              << " -> DENSE");
         best = -1;
         Graph_free(graph);
         return;
@@ -432,8 +519,28 @@ void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut
 
     best = Best_Ordering(Method);
 
-    if (Method[best] > extend_threshold * m * m) {
+    // The invariant the fill policy's early exit rests on: symbolic factorisation only ADDS
+    // entries, so the ordered fill can never be below the aggregate pattern in the same counting
+    // convention. A violation means the counts have left those units -- a build defect, not a
+    // data condition -- and it must not be papered over, because the gate-3 skip would then be
+    // unsound.
+    if (Method[best] < IVL_tsize(adjIVL)) {
+        rError("Chordal::ordering_bMat: ordered fill " << Method[best]
+               << " is below the aggregate pattern " << IVL_tsize(adjIVL)
+               << "; the fill-policy early exit's invariant is broken");
+    }
+    if (mode == BMAT_SPARSE) {
+        if (want_log)
+            rMessage("bmat: mode=sparse (forced) fill=" << Method[best] << " -> SPARSE");
+        return;
+    }
+    if (Method[best] > extend_threshold * m * (double)m) {
+        if (want_log)
+            rMessage("bmat: gate4 fill=" << Method[best] << " cutoff="
+                                         << extend_threshold * m * (double)m << " -> DENSE");
         best = -1;
+    } else if (want_log) {
+        rMessage("bmat: gate4 fill=" << Method[best] << " -> SPARSE");
     }
 }
 
