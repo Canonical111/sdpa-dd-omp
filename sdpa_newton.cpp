@@ -51,6 +51,38 @@ static int checkedProductInt(int a, int b, const char *what) {
 // unrecognised value is REFUSED, never treated as the default. A typo that silently disabled a
 // census would read as "the census found nothing", which is the worst possible failure mode for
 // a measurement whose whole purpose is to establish reachability.
+/* TEST-ONLY negative control for the hasF2Gcal fix, behind the spchol test gate.
+
+   Reproduces the WORST-CASE indeterminate read the group-scope fix eliminated: forces the flag
+   true on every pair that is not its group's first, which is exactly what the old per-pair
+   declaration could deliver. calF2 then skips computing G = X*F and contracts Aj against
+   whatever work2 still holds -- so if this changes the answer, the branch is consequential and
+   a fixture that reaches it is non-vacuous.
+
+   This hook exists because the OBVIOUS test does not work. `-ftrivial-auto-var-init=pattern`
+   fills an unsigned char with 0xFE and an int with 0xFEFEFEFE, but a `bool` with ZERO -- a bool
+   has no invalid representation to poison with. So zero-init and pattern-init both yield
+   `false` here, and a differential build of the two cannot distinguish the readings at all. An
+   earlier round of this port ran exactly that comparison across seven problems and reported "no
+   dependence"; the comparison could not have failed. See git log. */
+static bool bmat_test_f2_stale() {
+    const char *e = getenv("SDPA_BMAT_TEST_F2_STALE");
+    if (e == NULL || e[0] == '\0' || strcmp(e, "0") == 0) {
+        return false;
+    }
+#ifndef SDPA_SPCHOL_TEST_HOOKS
+    rError("SDPA_BMAT_TEST_F2_STALE is a test hook and this binary was not built with"
+           " -DSDPA_SPCHOL_TEST_HOOKS, so the hook does not exist here");
+    return false;
+#else
+    if (strcmp(e, "1") == 0) {
+        return true;
+    }
+    rError("SDPA_BMAT_TEST_F2_STALE must be 0 or 1 (got \"" << e << "\")");
+    return false;
+#endif
+}
+
 static bool bmat_asm_census_wanted() {
     const char *e = getenv("SDPA_BMAT_ASM_CENSUS");
     if (e == NULL || e[0] == '\0' || strcmp(e, "0") == 0) {
@@ -1428,6 +1460,7 @@ void Newton::compute_bMat_sparse_SDP(InputData &inputData, Solutions &currentPt,
            than argued. Ported from gmp, which fixed the same defect after a review supplied a
            -k counterexample to an earlier claim of unreachability. See git log. */
         bool hasF2Gcal = false;
+        const bool f2_stale = bmat_test_f2_stale();
 
         for (int iter = 0; iter < SDP_number[l]; iter++) {
             //      TimeStart(B_NDIAG_START1);
@@ -1453,6 +1486,10 @@ void Newton::compute_bMat_sparse_SDP(InputData &inputData, Solutions &currentPt,
                 }
                 TimeEnd(B_NDIAG_END2);
                 com.B_PRE += TimeCal(B_NDIAG_START2, B_NDIAG_END2);
+            } else if (f2_stale) {
+                // NEGATIVE CONTROL: the worst-case value the old per-pair declaration could
+                // hand to calF2 on a pair after its group's first.
+                hasF2Gcal = true;
             }
 
             int j = SDP_constraint2[l][iter];
@@ -1579,6 +1616,7 @@ void Newton::Make_bMat(InputData &inputData, Solutions &currentPt, WorkVariables
         if (!asm_cfg_done) {
             asm_cfg_done = true;
             (void)bmat_asm_census_wanted();
+            (void)bmat_test_f2_stale();
         }
     }
     if (bMat_type == SPARSE) {

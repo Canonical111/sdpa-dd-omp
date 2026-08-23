@@ -133,8 +133,9 @@ unsigned long long spchol_gate(const char *name, unsigned long long dflt) {
     return v;
 }
 
-// unset/auto -> gated; serial -> never thread; force -> thread every pivot (test/benchmark).
-enum SpcholMode { SPCHOL_AUTO, SPCHOL_SERIAL, SPCHOL_FORCE };
+// unset/auto -> gated; serial -> never thread; force -> thread every pivot (test/benchmark);
+// legacy -> the INDEPENDENT pre-refactor expression, kept as an oracle (see spchol_legacy).
+enum SpcholMode { SPCHOL_AUTO, SPCHOL_SERIAL, SPCHOL_FORCE, SPCHOL_LEGACY };
 SpcholMode spchol_mode() {
     const char *e = getenv("SDPA_SPCHOL_MODE");
     if (e == NULL || e[0] == '\0' || strcmp(e, "auto") == 0) {
@@ -146,9 +147,12 @@ SpcholMode spchol_mode() {
     if (strcmp(e, "force") == 0) {
         return SPCHOL_FORCE;
     }
+    if (strcmp(e, "legacy") == 0) {
+        return SPCHOL_LEGACY;
+    }
     // Strict: an unrecognised mode is refused, never treated as the default. A silent fallback
     // would let a typo run the very path the caller was trying to select against.
-    rError("SDPA_SPCHOL_MODE must be auto, serial or force (got \"" << e << "\")");
+    rError("SDPA_SPCHOL_MODE must be auto, serial, force or legacy (got \"" << e << "\")");
     return SPCHOL_AUTO;
 }
 
@@ -756,6 +760,57 @@ namespace {
 // The untouched serial factorisation. Kept as its own routine so that SDPA_SPCHOL_MODE=serial,
 // a one-member team, and a build without OpenMP all run THE SAME code rather than an emulation
 // of it inside a parallel region.
+/* THE INDEPENDENT ORACLE. Ported from gmp.
+
+   spchol_serial and the threaded region both call spchol_k1, so comparing them -- which is
+   what the factor stream does across thread counts -- proves the SHARED kernel is team-size
+   invariant. It cannot detect a bug IN that shared kernel, because both arms contain it.
+
+   This routine is the pre-refactor expression written out inline: same arithmetic, same order,
+   no call to spchol_k1. Comparing its factor stream against auto/serial/force therefore tests
+   something the thread comparison structurally cannot.
+
+   Why this and not "diff against the pre-port fork": that comparison is real -- the 48-cell
+   harness runs it after every commit -- but it is out-of-tree, printed-fields-only, manual, and
+   frozen at a tree that will drift. This arm is in-tree, factor-level, and runs in CI. Those
+   three properties do not overlap, so the arm is added rather than the harness dropped.
+
+   DELIBERATELY not refactored to share code with spchol_k1: an oracle that shares the
+   implementation it checks is not an oracle. If a future edit "removes the duplication" here,
+   it removes the test. See git log. */
+bool spchol_legacy(SparseMatrix &aMat, int *diagonalIndex) {
+    const int nDIM = aMat.nRow;
+    for (int i = 0; i < nDIM; ++i) {
+        const int a1 = diagonalIndex[i], a2 = diagonalIndex[i + 1];
+        if (!(aMat.sp_ele[a1] > 0.0)) {
+            rMessage("sparse cholesky miss condition :: not positive definite"
+                     << " :: pivot " << i << " = " << aMat.sp_ele[a1]);
+            return FAILURE;
+        }
+        aMat.sp_ele[a1] = 1.0 / sqrt(aMat.sp_ele[a1]);
+        for (int k1 = a1 + 1; k1 < a2; ++k1) {
+            aMat.sp_ele[k1] *= aMat.sp_ele[a1];
+        }
+        for (int k1 = a1 + 1; k1 < a2; ++k1) {
+            const dd_real tmp = aMat.sp_ele[k1];
+            int k3 = diagonalIndex[aMat.column_index[k1]];
+            const int indexB2 = diagonalIndex[aMat.column_index[k1] + 1];
+            for (int k2 = k1; k2 < a2; ++k2) {
+                const dd_real tmp2 = aMat.sp_ele[k2];
+                const int tmp3 = aMat.column_index[k2];
+                for (; k3 < indexB2; ++k3) {
+                    if (aMat.column_index[k3] == tmp3) {
+                        aMat.sp_ele[k3] -= tmp * tmp2;
+                        k3++;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    return _SUCCESS;
+}
+
 bool spchol_serial(SparseMatrix &aMat, int *diagonalIndex) {
     const int nDIM = aMat.nRow;
     for (int i = 0; i < nDIM; ++i) {
@@ -793,6 +848,15 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
     const unsigned long long gate_width = cfg.gate_width;
     const bool want_log = cfg.log;
 
+    if (mode == SPCHOL_LEGACY) {
+        // The oracle arm: no team, no gates, no shared kernel. Taken before any OpenMP
+        // decision so that what it factors cannot depend on the threading configuration.
+        if (want_log) {
+            rMessage("spchol: legacy (independent pre-refactor expression, oracle arm)");
+        }
+        return spchol_finish(aMat, diagonalIndex, aMat.nRow, cfg,
+                             spchol_legacy(aMat, diagonalIndex));
+    }
 #ifdef _OPENMP
     const int team = (mode == SPCHOL_SERIAL) ? 1 : omp_get_max_threads();
 #else
