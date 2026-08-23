@@ -83,6 +83,18 @@ static bool bmat_test_f2_stale() {
 #endif
 }
 
+static bool bmat_asm_profile_wanted() {
+    const char *e = getenv("SDPA_BMAT_ASM_PROFILE");
+    if (e == NULL || e[0] == '\0' || strcmp(e, "0") == 0) {
+        return false;
+    }
+    if (strcmp(e, "1") == 0) {
+        return true;
+    }
+    rError("SDPA_BMAT_ASM_PROFILE must be 0 or 1 (got \"" << e << "\")");
+    return false;
+}
+
 static bool bmat_asm_census_wanted() {
     const char *e = getenv("SDPA_BMAT_ASM_CENSUS");
     if (e == NULL || e[0] == '\0' || strcmp(e, "0") == 0) {
@@ -1656,17 +1668,43 @@ void Newton::Make_bMat(InputData &inputData, Solutions &currentPt, WorkVariables
         if (!asm_cfg_done) {
             asm_cfg_done = true;
             (void)bmat_asm_census_wanted();
+            (void)bmat_asm_profile_wanted();
             (void)bmat_test_f2_stale();
         }
     }
     if (bMat_type == SPARSE) {
+        /* SUBPHASE PROFILE (SDPA_BMAT_ASM_PROFILE=1). `Make bMat` is 36.8% of dE4's main loop
+           and serial, but that figure covers the WHOLE phase: the sparse zeroing, the SDP
+           assembly and the LP assembly. Attributing all of it to compute_bMat_sparse_SDP was
+           an inference from the source, and this fork has now been wrong twice reasoning that
+           way. So measure the three parts separately BEFORE anyone parallelises one of them.
+           Costs three clock reads per iteration when off. */
+        const bool prof = bmat_asm_profile_wanted();
+        double t_zero = 0.0, t_sdp = 0.0, t_lp = 0.0;
+        double t0 = prof ? Time::rGetUseTime() : 0.0;
         // set sparse_bMat zero
         for (int iter = 0; iter < sparse_bMat.NonZeroCount; ++iter) {
             sparse_bMat.sp_ele[iter] = 0.0;
         }
+        if (prof) {
+            const double t1 = Time::rGetUseTime();
+            t_zero = t1 - t0;
+            t0 = t1;
+        }
         compute_bMat_sparse_SDP(inputData, currentPt, work, com);
+        if (prof) {
+            const double t1 = Time::rGetUseTime();
+            t_sdp = t1 - t0;
+            t0 = t1;
+        }
         //   compute_bMat_sparse_SOCP(inputData,currentPt,work,com);
         compute_bMat_sparse_LP(inputData, currentPt, work, com);
+        if (prof) {
+            t_lp = Time::rGetUseTime() - t0;
+            com.bmat_asm_zero += t_zero;
+            com.bmat_asm_sdp += t_sdp;
+            com.bmat_asm_lp += t_lp;
+        }
     } else {
         // Keep this a FULL-matrix zero. Only the lower triangle is written below,
         // but leaving the strict upper half uninitialised would put indeterminate

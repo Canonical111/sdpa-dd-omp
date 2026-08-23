@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-07-31: per-formula bMat timers reported as worker-seconds. See git log. */
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-04: every parameter-file conversion is checked; a malformed entry is diagnosed instead of leaving the default in place. See git log. */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: sparse-assembly subphase timers (zero/SDP/LP), populated and reported only under SDPA_BMAT_ASM_PROFILE=1. See git log. */
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-05: MehrotraCorrector computes C.DxMat and b.DyVec once instead of twice. See git log. */
 #include <sdpa_parts.h>
 
@@ -48,6 +49,9 @@ ComputeTime::ComputeTime() {
     B_F2 = 0.0;
     B_F3 = 0.0;
     B_PRE = 0.0;
+    bmat_asm_zero = 0.0;
+    bmat_asm_sdp = 0.0;
+    bmat_asm_lp = 0.0;
 
     makegVecMul = 0.0;
     makegVec = 0.0;
@@ -87,6 +91,13 @@ void ComputeTime::display(FILE *fpout) {
     fprintf(fpout, " Predictor time  =       %f,  %f\n", Predictor, Predictor / MainLoop * 100.0);
     fprintf(fpout, " Corrector time  =       %f,  %f\n", Corrector, Corrector / MainLoop * 100.0);
     fprintf(fpout, " Make bMat time  =       %f,  %f\n", makebMat, makebMat / MainLoop * 100.0);
+    // Only when the subphase profile was requested: three zeros would otherwise imply the
+    // work was measured and found negligible, rather than not measured at all.
+    if (bmat_asm_zero != 0.0 || bmat_asm_sdp != 0.0 || bmat_asm_lp != 0.0) {
+        fprintf(fpout, "   asm zero      =       %f,  %f\n", bmat_asm_zero, bmat_asm_zero / MainLoop * 100.0);
+        fprintf(fpout, "   asm SDP       =       %f,  %f\n", bmat_asm_sdp, bmat_asm_sdp / MainLoop * 100.0);
+        fprintf(fpout, "   asm LP        =       %f,  %f\n", bmat_asm_lp, bmat_asm_lp / MainLoop * 100.0);
+    }
     fprintf(fpout, " Make bDia time  =       %f,  %f\n", B_DIAG, B_DIAG / MainLoop * 100.0);
     fprintf(fpout, " Make bF1  wsec  =       %f   (worker-s, summed over threads)\n", B_F1);
     fprintf(fpout, " Make bF2  wsec  =       %f   (worker-s, summed over threads)\n", B_F2);

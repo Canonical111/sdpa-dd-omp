@@ -63,6 +63,13 @@ class ComputeTime {
     double B_F2;
     double B_F3;
     double B_PRE;
+    /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: sparse-assembly subphase timers.
+       `Make bMat` is one figure covering three parts; these separate them so a decision to
+       parallelise one is based on its own measurement. Populated only under
+       SDPA_BMAT_ASM_PROFILE=1. See git log. */
+    double bmat_asm_zero;
+    double bmat_asm_sdp;
+    double bmat_asm_lp;
     double makegVecMul;
     double makegVec;
     double choleskybMat;
