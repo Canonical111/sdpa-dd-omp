@@ -1,4 +1,7 @@
 # Installing sdpa-dd-omp
+> **Runtime knobs:** every environment variable this fork adds, with whether it can change
+> results, is documented in [RUNTIME.md](RUNTIME.md).
+
 
 Double-double (~32 significant digits) SDP solver. Linux and macOS, x86-64 and aarch64.
 
