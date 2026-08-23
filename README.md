@@ -51,6 +51,24 @@ change.
 | upstream master, threaded | 537.8 s | 136.7 s | 112.4 s |
 | **this fork** (2026-08-02 campaign) | **292.0 s** | **58.8 s** | **86.0 s** |
 
+**On the large sparse problems the gap is much wider, because upstream's threading does not
+reach them at all.** Measured 2026-08-23 against upstream `6eaad8d` — the commit this fork
+branched from and still its `master` — rebuilt from its own recipe, i9-13900K at 24 threads:
+
+| | upstream, 1 thread | upstream, 24 threads | **this fork, 24 threads** | fork vs upstream |
+|---|---:|---:|---:|---:|
+| `dE4` (m=7401, routes sparse) | 49.19 s | 46.93 s — **1.05×** | **6.44 s — 7.31×** | **7.29×** |
+| `dE3` (m=6067, via `SDPA_BMAT_MODE=fill`) | 434.62 s | 60.84 s — 7.14× | **4.49 s** | **13.5×** |
+
+`dE4` is the striking column: **24 cores buy upstream 4.8%**, because it routes sparse and
+upstream threads neither the sparse Schur-complement Cholesky nor its assembly. Both are threaded
+here. `dE3` routes dense, where upstream *does* scale (7.14×) — the fork's lead there comes from
+taking the sparse route instead.
+
+Upstream also scales **negatively** on small problems — 11× slower on `control1` and 3.3× slower
+on `truss5` at 24 threads than at 1 — where this fork's work gating keeps `control1` flat to four
+decimal places. Full curves in [BENCHMARKS.md](BENCHMARKS.md).
+
 > The table above is the ORIGINAL release campaign, kept as history. The current
 > tables live in [BENCHMARKS.md](BENCHMARKS.md), regenerated 2026-08-07 after the
 > threading and contraction work: the same optimized8 column now totals 44.9 s and

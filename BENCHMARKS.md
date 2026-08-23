@@ -25,6 +25,67 @@ use external wall time and the corrected clock.
 
 Median of 3 repeats, seconds (`wall_s`). Spread = (max-min)/median.
 
+## Thread scaling against upstream — 2026-08-23
+
+Upstream `nakatamaho/sdpa-dd` at **`6eaad8d`**, the exact commit this fork branched from and still
+its `master`, rebuilt from its own recipe with `--enable-openmp=yes`. Same pinning, same
+parameter file, idle host (i9-13900K, 24 physical cores). This isolates the fork's changes and
+nothing else.
+
+### The large sparse problems — where upstream gains almost nothing
+
+`main loop time` over a fixed 4-iteration budget, medians of 2:
+
+| `dE4` (m=7401, routes **sparse**) | 1 | 2 | 4 | 8 | 16 | 24 | 1→24 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| upstream `6eaad8d` | 49.19 | 49.12 | 47.76 | 47.13 | 46.91 | 46.93 | **1.05×** |
+| **this fork** | 47.08 | 47.29 | 24.38 | 14.11 | 8.31 | **6.44** | **7.31×** |
+| fork advantage | 1.04× | 1.04× | 1.96× | 3.34× | 5.64× | **7.29×** | |
+
+**Upstream gets 4.8% out of 24 cores on `dE4`.** Not a regression — nothing at all, because `dE4`
+routes sparse and upstream threads *no part* of the sparse path: neither the Schur-complement
+Cholesky nor its assembly. Both are threaded here, which is the whole of the difference.
+
+| `dE3` (m=6067, routes **dense** at default) | 1 | 2 | 4 | 8 | 16 | 24 | 1→24 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| upstream `6eaad8d` | 434.62 | 408.85 | 211.26 | 121.36 | 70.81 | 60.84 | 7.14× |
+| **this fork** | 176.82 | 168.20 | 88.26 | 48.92 | 27.69 | **22.93** | 7.71× |
+| fork advantage | **2.46×** | 2.43× | 2.39× | 2.48× | 2.56× | 2.65× | |
+
+`dE3` is the honest counter-example: upstream **does** scale here, 7.14×, because it routes dense
+and the dense path *is* threaded upstream. The fork's lead at 24 threads is 2.65× — and **13.5×**
+with `SDPA_BMAT_MODE=fill`, which takes the sparse route upstream cannot thread (4.49 s).
+
+The 1-thread column is worth its own note: **2.46× before any threading enters**, from the
+`Rgemm` zero-skip and the FP-contraction pin.
+
+### Small problems — where upstream's threading is actively harmful
+
+Full solves, best of 2:
+
+| problem | upstream 1 thr | upstream 24 thr | upstream 1→24 | fork 1→24 |
+|---|---:|---:|---:|---:|
+| `control1` | 0.018 s | 0.203 s | **0.09× — 11× slower** | **1.00×** |
+| `truss5` | 0.800 s | 2.674 s | **0.30× — 3.3× slower** | 2.29× |
+| `theta1` | 0.229 s | 0.238 s | 0.96× — slower | 2.00× |
+| `arch0` | 13.044 s | 7.162 s | 1.82× | 6.33× |
+| `gpp100` | 0.830 s | 0.305 s | 2.72× | 4.57× |
+
+Adding threads makes upstream **11× slower** on `control1` and **3.3× slower** on `truss5`: the
+work is far too small to repay a fork/join, and upstream enters the parallel region anyway.
+
+The fork's `control1` row is the fix, visible directly — **1.00×, flat to four decimal places
+across all 24 threads.** The work/width gating declines to thread what cannot pay for itself, so
+adding cores costs exactly nothing rather than an order of magnitude.
+
+**So "upstream scales negatively" is true, but only for small problems.** On `gpp100`, `arch0` and
+`dE3` it scales perfectly respectably. Its distinctive failure on the large sparse problems is not
+negative scaling at all — it is *flatness*, and that is the larger gap.
+
+Raw rows: `dd_upstream_vs_fork.tsv`, `dd_small_scaling.tsv` in the review artifacts.
+
+---
+
 | problem | m | v712 | upstream1 | upstream24 | upstream8P | optimized1 | optimized8P | optimized24 | optimized24arena1 |
 |---|---|---|---|---|---|---|---|---|---|
 | control1 ‡ | 21 | 0.010 | 0.010 | 0.170 ±24% | 0.070 ±29% | 0.010 | 0.010 | 0.010 | 0.010 |
