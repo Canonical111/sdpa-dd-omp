@@ -547,3 +547,424 @@ jobs:
           n=$(grep -c -- '-Werror=return-type' strict.log || true)
           [ "$n" -ge 1 ] || { echo "FAIL: strict flags never reached a compile line" >&2; exit 1; }
           echo "strict flags present on $n compile line(s)"
+
+  build-guards:
+    # NEGATIVE tests for the two build guards added 2026-08-20. Every other job in this file
+    # proves a build that SHOULD work does work. None of them proved that a build that should
+    # FAIL actually fails -- so the guards themselves were untested, and a guard that never
+    # fires is indistinguishable from no guard at all.
+    #
+    # Four cases, each asserting on the guard's own message so that a build failing for some
+    # unrelated reason cannot be mistaken for the guard working.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: host build deps, with retries -- GitHub's apt mirrors stall intermittently
+        run: |
+          set -e
+          for i in 1 2 3 4; do
+            if timeout 180 sudo apt-get update -o Acquire::Retries=3; then break; fi
+            echo "apt-get update attempt $i timed out or failed; retrying" >&2
+            [ "$i" = 4 ] && { echo "FAIL: apt-get update failed 4 times" >&2; exit 1; }
+            sleep $((i * 15))
+          done
+          for i in 1 2 3 4; do
+            if timeout 300 sudo apt-get install -y -o Acquire::Retries=3 build-essential autoconf automake libtool; then break; fi
+            echo "apt-get install attempt $i timed out or failed; retrying" >&2
+            [ "$i" = 4 ] && { echo "FAIL: apt-get install failed 4 times" >&2; exit 1; }
+            sleep $((i * 15))
+          done
+      - run: autoreconf -fi
+      - name: guard 1 -- a C++ compiler without OpenMP must ABORT configure, not build serial
+        run: |
+          set -e
+          # AC_OPENMP does not fail on a compiler that lacks OpenMP: it records "unsupported"
+          # and continues, which is how a SERIAL binary can be produced by a run that reports
+          # success. The guard turns that into an error. Tested with a wrapper that rejects
+          # every OpenMP flag rather than with a real compiler, so the test does not depend on
+          # whether the runner image happens to ship libomp.
+          mkdir -p "$HOME/fakebin"
+          # printf, NOT a heredoc: a heredoc body inside an indented YAML block keeps the
+          # block's leading spaces, so "#!/bin/sh" would be written indented and the shebang
+          # would not be honoured -- the wrapper would run under the wrong shell or not at all.
+          {
+            printf '#!/bin/sh\n'
+            printf 'for a in "$@"; do\n'
+            printf '  case "$a" in\n'
+            printf '    -fopenmp*|-xopenmp*|-openmp|-qsmp*|-mp|-omp*|-Popenmp*|--openmp*|-homp|-qopenmp*)\n'
+            printf '      echo "$0: unrecognized command line option $a" >&2; exit 1;;\n'
+            printf '  esac\n'
+            printf 'done\n'
+            printf 'exec g++ "$@"\n'
+          } > "$HOME/fakebin/noomp-g++"
+          chmod +x "$HOME/fakebin/noomp-g++"
+          head -1 "$HOME/fakebin/noomp-g++" | grep -qx '#!/bin/sh' \
+            || { echo "FAIL: wrapper shebang is not on line 1 unindented; the test would be vacuous" >&2; exit 1; }
+          # sanity: the wrapper must actually reject the flag, or this test proves nothing
+          if "$HOME/fakebin/noomp-g++" -fopenmp -x c++ /dev/null -o /dev/null 2>/dev/null; then
+            echo "FAIL: the no-OpenMP wrapper accepted -fopenmp; the test is vacuous" >&2; exit 1
+          fi
+          # ...and must otherwise work, or configure would fail for the wrong reason
+          echo 'int main(){return 0;}' > /tmp/t.cpp
+          "$HOME/fakebin/noomp-g++" /tmp/t.cpp -o /tmp/t \
+            || { echo "FAIL: the wrapper cannot compile at all; the test would be misleading" >&2; exit 1; }
+
+          set +e
+          ./configure --enable-openmp=yes CXX="$HOME/fakebin/noomp-g++" > guard1.log 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -ne 0 ] || { echo "FAIL: configure SUCCEEDED with a compiler that has no OpenMP -- the guard is gone, and this build would be silently serial" >&2; tail -20 guard1.log >&2; exit 1; }
+          grep -q "does not support OpenMP" guard1.log \
+            || { echo "FAIL: configure failed, but not with the guard's message -- it broke for some other reason, so this proves nothing" >&2; tail -30 guard1.log >&2; exit 1; }
+          echo "guard 1: configure aborted with '$(grep -m1 "does not support OpenMP" guard1.log)'"
+      - name: guard 1 escape hatch -- --disable-openmp with the SAME compiler must SUCCEED
+        run: |
+          set -e
+          # A guard that cannot be turned off deliberately is a bug, not a safeguard. The
+          # documented escape must work, or users with no OpenMP cannot build at all.
+          make distclean > /dev/null 2>&1 || true
+          ./configure --disable-openmp CXX="$HOME/fakebin/noomp-g++" > guard1b.log 2>&1 \
+            || { echo "FAIL: --disable-openmp did not survive a compiler without OpenMP" >&2; tail -20 guard1b.log >&2; exit 1; }
+          echo "guard 1 escape hatch: --disable-openmp configures cleanly"
+      - name: guard 2 -- SPOOLES refuses an empty, POSIX-default, or incapable CC
+        run: |
+          set -e
+          # The guards sit at the top of the work/$(BUILD_STAMP) recipe and fire before any
+          # compilation, so the configure stamp is faked rather than earned: this tests the
+          # guards, not the SPOOLES build, and takes seconds instead of minutes.
+          make distclean > /dev/null 2>&1 || true
+          ./configure --enable-openmp=no > cfgg2.log 2>&1 || { tail -20 cfgg2.log >&2; exit 1; }
+          mkdir -p external/spooles/work
+          touch external/spooles/work/.spooles_configure_done
+
+          expect_fail() {  # expect_fail <label> <needle> <make-args...>
+            label=$1; needle=$2; shift 2
+            set +e
+            out=$(make -C external/spooles work/.spooles_build_done "$@" 2>&1)
+            rc=$?
+            set -e
+            [ "$rc" -ne 0 ] || { echo "FAIL: $label -- make SUCCEEDED; the guard did not fire" >&2; echo "$out" >&2; exit 1; }
+            echo "$out" | grep -q "$needle" \
+              || { echo "FAIL: $label -- make failed but without '$needle', so it broke for another reason" >&2; echo "$out" >&2; exit 1; }
+            echo "  $label: fired with '$needle'"
+          }
+
+          expect_fail "empty CC"        "CC is empty"                  CC=
+          expect_fail "POSIX default"   "c99 rejects the -f flags"     CC=c99
+
+          # An INCAPABLE compiler that is NOT named c99. The name check cannot catch this; the
+          # -funroll-all-loops capability probe is what does. Without this case the probe could
+          # be deleted and every other test here would still pass.
+          {
+            printf '#!/bin/sh\n'
+            printf 'for a in "$@"; do case "$a" in -f*) echo "$0: illegal option" >&2; exit 1;; esac; done\n'
+            printf 'exec cc "$@"\n'
+          } > "$HOME/fakebin/nof-cc"
+          chmod +x "$HOME/fakebin/nof-cc"
+          head -1 "$HOME/fakebin/nof-cc" | grep -qx '#!/bin/sh' \
+            || { echo "FAIL: probe wrapper shebang is indented; the test would be vacuous" >&2; exit 1; }
+          "$HOME/fakebin/nof-cc" -funroll-all-loops -c /dev/null -o /tmp/x.o 2>/dev/null \
+            && { echo "FAIL: the incapable wrapper ACCEPTED -funroll-all-loops; the probe test is vacuous" >&2; exit 1; }
+          case "$HOME/fakebin/nof-cc" in *c99) echo "FAIL: rename the probe wrapper; it must NOT end in c99 or it tests the name check" >&2; exit 1;; esac
+          expect_fail "incapable CC"    "rejects -funroll-all-loops"   CC="$HOME/fakebin/nof-cc"
+
+          # And a capable compiler must get PAST the guards. Verified by the message NOT being
+          # a guard message: the recipe then proceeds into the real SPOOLES build, which has no
+          # extracted tree here, so it fails later and differently. That is the pass condition.
+          set +e
+          out=$(make -C external/spooles work/.spooles_build_done CC=gcc 2>&1)
+          set -e
+          if echo "$out" | grep -qE "CC is empty|c99 rejects the -f flags|rejects -funroll-all-loops"; then
+            echo "FAIL: a capable compiler (gcc) was rejected by one of the guards -- false positive" >&2
+            echo "$out" >&2; exit 1
+          fi
+          echo "  capable CC (gcc): passed all three guards"
+          echo "guard 2: empty, POSIX-default and incapable compilers all rejected; gcc accepted"
+
+  portable-build:
+    # C13, 2026-08-05. Until this date sdpa-dd had NO supported portable or reproducible
+    # build, for two reasons that compounded:
+    #   configure.ac:143-144  AC_SUBST([CFLAGS],[""])  AC_SUBST([CXXFLAGS],[""])
+    #       -- discarded every flag passed to configure, including the $pthread_cflags
+    #          appended four lines above, leaving `CXXFLAGS = ` in the generated Makefile;
+    #   Makefile.am           AM_CXXFLAGS = -O2 -march=native ...
+    #       -- the only remaining source of flags, and unremovable because of the above.
+    # Together: you could not add a flag and you could not take -march=native away, so every
+    # binary was pinned to the ISA of whatever machine built it.
+    #
+    # This job is the regression guard, and it greps COMPILE LINES. It deliberately does not
+    # check that a flag changes the binary: the build path is embedded in the objects, so two
+    # binaries differ whether or not the flag was applied, and an earlier job in this repo
+    # passed for months on exactly that false signal (0 of 3671 compile lines carried the
+    # flag under test).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: host build deps, with retries -- GitHub's apt mirrors stall intermittently
+        run: |
+          set -e
+          # 2026-08-19: three consecutive runs lost 13-160 minutes with jobs wedged on the very
+          # first `apt-get update`, while OTHER jobs in the same run sailed past it -- so it is
+          # intermittent mirror slowness, not an outage, and not our code. A bare apt call has no
+          # timeout of its own: it waits, the job waits, and the only signal is a run that never
+          # finishes. Each attempt now gets a hard timeout so a wedged mirror costs 3 minutes and
+          # a retry instead of the whole run.
+          for i in 1 2 3 4; do
+            if timeout 180 sudo apt-get update -o Acquire::Retries=3; then break; fi
+            echo "apt-get update attempt $i timed out or failed; retrying" >&2
+            [ "$i" = 4 ] && { echo "FAIL: apt-get update failed 4 times" >&2; exit 1; }
+            sleep $((i * 15))
+          done
+          for i in 1 2 3 4; do
+            if timeout 300 sudo apt-get install -y -o Acquire::Retries=3 build-essential autoconf automake libtool; then break; fi
+            echo "apt-get install attempt $i timed out or failed; retrying" >&2
+            [ "$i" = 4 ] && { echo "FAIL: apt-get install failed 4 times" >&2; exit 1; }
+            sleep $((i * 15))
+          done
+      - run: autoreconf -fi
+      - name: portable build -- user CXXFLAGS reach the compile line, -march=native is gone
+        run: |
+          set -e
+          ./configure --enable-openmp=no --disable-march-native CXXFLAGS=-DPORTABLE_BUILD_PROBE=1 > cfg1.log
+          grep -q '^CXXFLAGS = .*PORTABLE_BUILD_PROBE' Makefile \
+            || { echo 'FAIL: configure discarded CXXFLAGS -- the AC_SUBST([CXXFLAGS],[""]) defect is back' >&2; exit 1; }
+          make -j"$(nproc)" > build1.log 2>&1 || { tail -40 build1.log >&2; exit 1; }
+          n=$(grep -E ' -c ' build1.log | grep -c -- 'PORTABLE_BUILD_PROBE' || true)
+          [ "${n:-0}" -ge 10 ] || { echo "FAIL: only $n compile lines carried the user flag" >&2; exit 1; }
+          m=$(grep -E ' -c ' build1.log | grep -c -- '-march=native' || true)
+          [ "${m:-0}" -eq 0 ] || { echo "FAIL: -march=native survived --disable-march-native on $m compile line(s)" >&2; exit 1; }
+          ./sdpa_dd -ds example1.dat-s -o portable.result -p param.sdpa
+          grep objValPrimal portable.result
+          echo "portable build: $n compile lines carried the user flag, 0 carried -march=native"
+      - name: the DEFAULT build still carries -march=native (the default was not flipped)
+        run: |
+          set -e
+          make distclean > /dev/null 2>&1 || true
+          ./configure --enable-openmp=no > cfg2.log
+          grep -q 'accepts -march=native... yes' cfg2.log \
+            || { echo 'FAIL: the -march=native probe did not run or did not pass' >&2; exit 1; }
+          make -j"$(nproc)" > build2.log 2>&1 || { tail -40 build2.log >&2; exit 1; }
+          m=$(grep -E ' -c ' build2.log | grep -c -- '-march=native' || true)
+          [ "${m:-0}" -ge 10 ] \
+            || { echo "FAIL: default build lost -march=native ($m compile lines) -- that is a performance change nobody measured" >&2; exit 1; }
+          echo "default build: $m compile lines carried -march=native"
+
+  installer:
+    # The packaged installer IS the advertised path (README: "one-command"; the install-sdpa-omp
+    # skill makes it the standard route), yet until 2026-08-22 CI reconstructed the same build
+    # by hand and never executed install.sh itself -- so a regression in the installer would ship
+    # with green CI. This job runs the script exactly as a user would, both modes, in one tree
+    # (the second run also exercises the mode switch and the unconditional autoreconf on a tree
+    # that already has a configure). The gmp copy of this job also strict-checks a five-host
+    # benchmark archive; dd has no such archive, so that step is deliberately absent rather than
+    # stubbed -- a step that validates nothing is worse than no step.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: host build deps, with retries -- same rationale as the build jobs
+        run: |
+          set -e
+          for i in 1 2 3 4; do
+            if timeout 180 sudo apt-get update -o Acquire::Retries=3; then break; fi
+            echo "apt-get update attempt $i timed out or failed; retrying" >&2
+            [ "$i" = 4 ] && { echo "FAIL: apt-get update failed 4 times" >&2; exit 1; }
+            sleep $((i * 15))
+          done
+          for i in 1 2 3 4; do
+            if timeout 300 sudo apt-get install -y -o Acquire::Retries=3 build-essential autoconf automake libtool; then break; fi
+            echo "apt-get install attempt $i timed out or failed; retrying" >&2
+            [ "$i" = 4 ] && { echo "FAIL: apt-get install failed 4 times" >&2; exit 1; }
+            sleep $((i * 15))
+          done
+      - name: packaged installer, default OpenMP path
+        run: |
+          set -e
+          bash .claude/skills/install-sdpa-omp/scripts/install.sh 2>&1 | tee /tmp/inst1.log
+          grep -q "OpenMP runtime markers: 1" /tmp/inst1.log \
+            || { echo "FAIL: OpenMP install did not report a linked OpenMP runtime" >&2; exit 1; }
+          tail -1 /tmp/inst1.log | grep -q "OMP_NUM_THREADS" \
+            || { echo "FAIL: OpenMP install must end with thread guidance" >&2; exit 1; }
+      - name: packaged installer, --serial in the SAME tree (mode switch + reconfigure)
+        run: |
+          set -e
+          bash .claude/skills/install-sdpa-omp/scripts/install.sh --serial 2>&1 | tee /tmp/inst2.log
+          grep -q "OpenMP runtime markers: 0" /tmp/inst2.log \
+            || { echo "FAIL: serial install reported OpenMP markers" >&2; exit 1; }
+          tail -1 /tmp/inst2.log | grep -q "SERIAL" \
+            || { echo "FAIL: a serial install must not end with OpenMP advice (finding 2 of the 2026-08-22 review)" >&2; exit 1; }
+
+  omp-data-sharing:
+    # The leg that would have caught the bug that shipped: the released tip could not be
+    # compiled AT ALL by GCC 8, and nothing noticed. See review/GCC8-PORTABILITY-FIX-PLAN.md.
+    #
+    # Two compilers, because the two OpenMP revisions disagree and each rejects a DIFFERENT
+    # wrong spelling. Auditing the other jobs showed why neither was reachable: the only clang
+    # leg configures --enable-openmp=no, so clang never parses a pragma at all, and every job
+    # that does compile OpenMP runs the runner's default GCC (>= 13). Catching this needs
+    # GCC <= 8 WITH OpenMP on, or clang WITH OpenMP on, and no job satisfied either conjunction.
+    #
+    # Syntax-only, deliberately. This class of bug is a front-end diagnostic, so parsing is
+    # enough, and it costs seconds where a full build per compiler costs ~10 minutes. It will
+    # NOT catch link errors, ABI problems or miscompilation -- a chosen limit, so that the leg
+    # stays cheap enough to remain switched on.
+    #
+    # The old compiler runs via `docker run` rather than `container:`, so the checkout happens
+    # on the host with a current Node. actions/checkout inside an end-of-life image is a
+    # well-known way to lose an afternoon to glibc.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: host deps, and the vendored SPOOLES headers
+        run: |
+          set -e
+          # Same retry discipline as the other apt steps -- see "host build deps, with retries".
+          for i in 1 2 3 4; do timeout 180 sudo apt-get update -o Acquire::Retries=3 && break
+            [ "$i" = 4 ] && { echo "FAIL: apt-get update failed 4 times" >&2; exit 1; }; sleep $((i*15)); done
+          for i in 1 2 3 4; do timeout 300 sudo apt-get install -y -o Acquire::Retries=3 \
+              --no-install-recommends clang libomp-dev libqd-dev && break
+            [ "$i" = 4 ] && { echo "FAIL: apt-get install failed 4 times" >&2; exit 1; }; sleep $((i*15)); done
+          # SPOOLES is a tracked tarball, so this needs no network.
+          mkdir -p /tmp/sp && tar xzf external/spooles/download/spooles.2.2.tgz -C /tmp/sp
+      - name: clang with OpenMP ON -- real sources, plus a control that must FAIL
+        run: |
+          set -e
+          I="-I. -Implapack -I/tmp/sp"
+          clang++ -fsyntax-only -fopenmp $I sdpa_linear.cpp sdpa_newton.cpp
+          clang++ -fsyntax-only -fopenmp tests/omp_datasharing.cpp
+          # NON-VACUITY: a leg that only compiles code that works cannot tell you it still
+          # detects code that does not.
+          if clang++ -fsyntax-only -fopenmp -DSPELLING_BAD_UNLISTED tests/omp_datasharing.cpp 2>/dev/null; then
+            echo "FAIL: clang accepted a const left out of default(none) -- this leg no longer" >&2
+            echo "      enforces the OpenMP 5.0 rule it exists to enforce" >&2
+            exit 1
+          fi
+          echo "clang: real sources parse with OpenMP on, and the 5.0 rule is enforced"
+      - name: GCC 8 -- the compiler the released tip could not be built by
+        run: |
+          set -e
+          docker run --rm -v "$PWD:/w" -w /w gcc:8 bash -c '
+            set -e
+            # Debian buster is past end of life, so its mirrors have moved to archive.
+            apt-get update >/dev/null 2>&1 || {
+              sed -i "s|deb.debian.org|archive.debian.org|g; s|security.debian.org|archive.debian.org|g; /-updates/d" /etc/apt/sources.list
+              apt-get -o Acquire::Check-Valid-Until=false update >/dev/null
+            }
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libqd-dev >/dev/null
+            g++ --version | head -1
+            g++ -fsyntax-only -fopenmp -I. -Implapack sdpa_linear.cpp
+            g++ -fsyntax-only -fopenmp tests/omp_datasharing.cpp
+            if g++ -fsyntax-only -fopenmp -DSPELLING_BAD_SHARED_CONST tests/omp_datasharing.cpp 2>/dev/null; then
+              echo "FAIL: GCC 8 accepted a const named in shared() -- this leg no longer" >&2
+              echo "      detects the exact bug it was added for" >&2
+              exit 1
+            fi
+            echo "gcc 8: sdpa_linear.cpp parses, and the OpenMP 4.5 rule is enforced"
+          '
+      - name: the coverage claim must not go stale
+        run: |
+          set -e
+          # The GCC 8 leg checks sdpa_linear.cpp, which is where every default(none) in the
+          # tree lives. If one appears elsewhere, the claim silently narrows -- so fail loudly
+          # and say what to do instead.
+          f=$(grep -rl "default(none)" sdpa_*.cpp | sort | tr "\n" " ")
+          if [ "$f" != "sdpa_linear.cpp " ]; then
+            echo "FAIL: default(none) now appears in: $f" >&2
+            echo "      The GCC 8 leg only syntax-checks sdpa_linear.cpp. Add the new file to" >&2
+            echo "      that step, or this job stops covering what it claims to cover." >&2
+            exit 1
+          fi
+          echo "coverage: every default(none) in the tree is in a file this job checks"
+
+  spchol-threading:
+    # C8 of the port plan. The sparse Schur Cholesky and SDPA_BMAT_MODE landed on dev with their
+    # evidence gathered by hand on one machine; this job is what keeps them honest afterwards.
+    # It asserts three things no other job here can:
+    #   1. NON-VACUITY -- SDPA_SPCHOL_LOG must report pivots actually threaded. Without this a
+    #      green run proves nothing, because the gates could silently reject every pivot.
+    #   2. BIT-IDENTITY across thread counts, which is the property the threading claims by
+    #      construction (each k1 owns a disjoint destination row).
+    #   3. STRICT PARSING of every knob, including wrong case, on a problem that routes DENSE --
+    #      the exact hole a negative test caught during development, where the validator lived
+    #      inside the sparse overload and so never ran for dense-route problems.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: host build deps, with retries
+        run: |
+          set -e
+          for i in 1 2 3 4; do
+            if timeout 180 sudo apt-get update -o Acquire::Retries=3; then break; fi
+            [ "$i" = 4 ] && { echo "FAIL: apt-get update failed 4 times" >&2; exit 1; }
+            sleep $((i * 15))
+          done
+          for i in 1 2 3 4; do
+            if timeout 300 sudo apt-get install -y -o Acquire::Retries=3 build-essential autoconf automake libtool; then break; fi
+            [ "$i" = 4 ] && { echo "FAIL: apt-get install failed 4 times" >&2; exit 1; }
+            sleep $((i * 15))
+          done
+      - run: autoreconf -fi
+      - run: ./configure --enable-openmp=yes
+      - run: make -j"$(nproc)"
+      - name: strict parsing -- every knob, on a DENSE-route problem
+        run: |
+          set -e
+          # example1 is m=10, so it exits at gate 1 and never reaches the sparse Cholesky. That
+          # is the point: these validators must fire anyway.
+          for bad in "SDPA_SPCHOL_MODE=bogus" "SDPA_SPCHOL_MODE=Auto" \
+                     "SDPA_DD_MIN_SPCHOL_WORK=abc" "SDPA_DD_MIN_SPCHOL_WIDTH=-" \
+                     "SDPA_BMAT_MODE=bogus" "SDPA_BMAT_MODE=Fill" \
+                     "SDPA_BMAT_MAX_GB=" "SDPA_BMAT_MAX_GB=abc" "SDPA_BMAT_MAX_GB=-1"; do
+            if env $bad ./sdpa_dd -ds example1.dat-s -o /tmp/o -p param.sdpa >/tmp/l 2>&1; then
+              echo "FAIL: $bad was ACCEPTED -- a typo must not select a default silently" >&2
+              exit 1
+            fi
+            grep -qE "must be|is set but empty" /tmp/l \
+              || { echo "FAIL: $bad exited nonzero but printed no diagnostic" >&2; cat /tmp/l; exit 1; }
+            echo "  refused: $bad"
+          done
+          # ...and every VALID value must still be accepted, or the parser is just broken.
+          for ok in "SDPA_SPCHOL_MODE=auto" "SDPA_SPCHOL_MODE=serial" "SDPA_SPCHOL_MODE=force" \
+                    "SDPA_BMAT_MODE=auto" "SDPA_BMAT_MODE=fill" "SDPA_BMAT_MODE=dense" \
+                    "SDPA_BMAT_MAX_GB=100"; do
+            env $ok ./sdpa_dd -ds example1.dat-s -o /tmp/o -p param.sdpa >/dev/null 2>&1 \
+              || { echo "FAIL: valid setting $ok was refused" >&2; exit 1; }
+            echo "  accepted: $ok"
+          done
+      - name: non-vacuity + bit-identity on a problem that reaches the sparse path
+        run: |
+          set -e
+          # Build a problem big enough to clear gate 1 (m > 100) and route sparse. Forced sparse
+          # plus forced parallel guarantees the threaded path is exercised regardless of gates,
+          # so this cannot pass by silently running serial.
+          python3 tests/gen_spchol_fixture.py > spchol_fix.dat-s
+          m=$(sed -n 1p spchol_fix.dat-s)
+          echo "fixture mDIM=$m"
+          SDPA_BMAT_MODE=sparse SDPA_SPCHOL_MODE=force SDPA_SPCHOL_LOG=1 OMP_NUM_THREADS=4 \
+            ./sdpa_dd -ds spchol_fix.dat-s -o /tmp/s4 -p param.sdpa > /tmp/log4 2>&1 || true
+          grep -aoE "spchol: team=[0-9]+ pivots_threaded=[0-9]+ pivots_serial=[0-9]+" /tmp/log4 | head -1
+          thr=$(grep -aoE "pivots_threaded=[0-9]+" /tmp/log4 | head -1 | cut -d= -f2)
+          [ "${thr:-0}" -ge 1 ] \
+            || { echo "FAIL: no pivot ran threaded -- this job would be vacuous" >&2; cat /tmp/log4; exit 1; }
+          echo "  non-vacuity OK: $thr pivots threaded"
+          # Bit-identity: the factor must not depend on the team size.
+          for th in 1 2 4; do
+            SDPA_BMAT_MODE=sparse SDPA_SPCHOL_MODE=force OMP_NUM_THREADS=$th \
+              ./sdpa_dd -ds spchol_fix.dat-s -o /tmp/bi.$th -p param.sdpa >/dev/null 2>&1 || true
+            grep -a -m1 objValPrimal /tmp/bi.$th >> /tmp/objs || true
+          done
+          n=$(sort -u /tmp/objs | wc -l)
+          cat /tmp/objs
+          [ "$n" = 1 ] \
+            || { echo "FAIL: $n distinct objectives across 1/2/4 threads -- threading is not bit-identical" >&2; exit 1; }
+          echo "  bit-identical across 1/2/4 threads"
+      - name: auto must be unchanged by the mode switch
+        run: |
+          set -e
+          # An unset SDPA_BMAT_MODE and an explicit auto must agree exactly: the per-mode cutoffs
+          # are ternaries whose auto arm is the released expression, and this is what checks it.
+          ./sdpa_dd -ds example1.dat-s -o /tmp/u -p param.sdpa >/dev/null 2>&1
+          SDPA_BMAT_MODE=auto ./sdpa_dd -ds example1.dat-s -o /tmp/a -p param.sdpa >/dev/null 2>&1
+          diff <(grep -aE "objValPrimal|objValDual|Iteration|phase" /tmp/u) \
+               <(grep -aE "objValPrimal|objValDual|Iteration|phase" /tmp/a) \
+            || { echo "FAIL: unset and auto disagree" >&2; exit 1; }
+          echo "  unset == auto"
