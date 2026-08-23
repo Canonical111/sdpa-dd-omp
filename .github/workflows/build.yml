@@ -1064,21 +1064,25 @@ jobs:
           fi
           echo "  (1) stale-G injection changes the result: the guarded path matters"
 
-          # (2) The fill>=aggregate invariant can actually fire.
+          # (2) The fill>=aggregate invariant can actually fire. NOT on f2d.dat-s: that fixture
+          #     is m=5, so it exits at gate 1 and ordering_bMat returns before the invariant is
+          #     ever evaluated. The spchol fixture clears gate 1 and routes sparse.
+          python3 tests/gen_spchol_fixture.py > spchol_fix.dat-s
           if SDPA_BMAT_TEST_BREAK_INVARIANT=1 SDPA_BMAT_MODE=fill \
-               ./sdpa_dd -ds f2d.dat-s -o /tmp/bi -p param.sdpa >/tmp/bl 2>&1; then
-            echo "FAIL: the injected invariant violation did not stop the solve" >&2; exit 1
+               ./sdpa_dd -ds spchol_fix.dat-s -o /tmp/bi -p param.sdpa >/tmp/bl 2>&1; then
+            echo "FAIL: the injected invariant violation did not stop the solve" >&2
+            echo "      (does this fixture actually reach ordering_bMat's invariant?)" >&2
+            exit 1
           fi
           grep -q "TEST INJECTION ACTIVE" /tmp/bl \
             || { echo "FAIL: invariant fired without naming the injection -- a lying diagnostic" >&2
                  cat /tmp/bl; exit 1; }
           echo "  (2) the fill-policy invariant fires, and says the value was injected"
-          SDPA_BMAT_MODE=fill ./sdpa_dd -ds f2d.dat-s -o /tmp/bi2 -p param.sdpa >/dev/null 2>&1
+          SDPA_BMAT_MODE=fill ./sdpa_dd -ds spchol_fix.dat-s -o /tmp/bi2 -p param.sdpa >/dev/null 2>&1
           echo "  (2b) and the same run without injection succeeds"
 
           # (3) The independent legacy arm agrees with the shared-kernel arms. serial and the
           #     threaded region both call spchol_k1, so only this can check that kernel.
-          python3 tests/gen_spchol_fixture.py > spchol_fix.dat-s
           for m in legacy serial force; do
             rm -f /tmp/lg.$m
             SDPA_BMAT_MODE=sparse SDPA_SPCHOL_MODE=$m SDPA_SPCHOL_DIGEST_DUMP=/tmp/lg.$m \
