@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 ------------------------------------------------------------- */
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-03: SparseMatrix::copyFrom capacity fix; DenseMatrix::copyFrom leak fix; parameterized ctors initialize members. See git log. */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: checked size arithmetic in DenseMatrix::initialize and SparseMatrix::changeToDense -- nRow*nCol was formed in int, and changeToDense's density threshold was computed through the overflowed product. See git log. */
 
 #include <sdpa_struct.h>
 

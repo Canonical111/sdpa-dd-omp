@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 #define __sdpa_newton_h__
 
 #include <sdpa_dataset.h>
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: declares census_bMat_sparse_SDP, the sparse-assembly eligibility and behaviour census. See git log. */
 #include <sdpa_chordal.h>
 
 #define SparseCholesky 1
