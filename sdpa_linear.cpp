@@ -20,11 +20,143 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 ------------------------------------------------------------- */
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-03: fatal eigensolver failure exits non-zero; rdpotf2_ returns on all paths. See git log. */
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-05: the sparse Schur Cholesky reports a non-positive pivot as FAILURE instead of silently zeroing it and returning success. See git log. */
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: threads the sparse Schur-complement
+   Cholesky's k1 update loop, behind measured work gates and an explicit mode switch. Ported from
+   sdpa-gmp-omp, where the same threading was derived and reviewed; see
+   review/DD-PORT-PLAN-2026-08-23.md in the recipe repo for why it transfers and what does not.
+
+   WHY IT IS RACE-FREE WITHOUT ATOMICS, and bit-identical at any thread count. For a fixed pivot
+   i, each k1 owns one target row j = column_index[k1]; column indices ascend and are unique
+   within a segment, so distinct k1 write disjoint index ranges. Every read comes from pivot row
+   i, which this loop never writes. Each destination is therefore touched by exactly one k1 per
+   pivot, the k2 order inside it is unchanged, and a barrier per pivot preserves the i order --
+   so every destination sees the identical sequence of subtractions in the identical order. That
+   is a statement about the loop's dependence structure, not about the arithmetic, which is why
+   it holds at double-double exactly as it does at 256 bits.
+
+   WHAT THE gmp VERSION NEEDS AND THIS ONE DOES NOT. There, `sp_ele[k3] -= tmp * tmp2` builds a
+   __gmp_expr temporary -- an mpf_init2 + malloc + free around one multiply and one subtract --
+   so it carries a per-thread mpf_class scratch and asserts a uniform-precision invariant over
+   the factor. `dd_real` is a 16-byte value type: the same expression allocates nothing and has
+   no runtime precision, so the scratch, its plumbing and that invariant do not exist here.
+
+   THE GATES ARE UNCALIBRATED FOR dd. A dd multiply-add is roughly an order of magnitude cheaper
+   than an mpf one at 256 bits, so break-even sits at MORE updates, not fewer, and gmp's values
+   must not be copied. The defaults below are deliberately conservative floors against pathology;
+   calibrate on the target machine before claiming any of them is a tuned optimum. */
 
 #include <sdpa_linear.h>
 #include <sdpa_dataset.h>
 
+#include <cstdlib>
+#include <cstring>
+#include <cerrno>
+#include <climits>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 namespace sdpa {
+
+namespace {
+
+// Conservative floors, NOT tuned optima -- see the notice above.
+#ifndef SDPA_DD_MIN_SPCHOL_WORK
+#define SDPA_DD_MIN_SPCHOL_WORK 200000ULL /* matched updates in one pivot */
+#endif
+#ifndef SDPA_DD_MIN_SPCHOL_WIDTH
+#define SDPA_DD_MIN_SPCHOL_WIDTH 32ULL /* target rows in one pivot */
+#endif
+
+// Pivot bookkeeping every thread computes identically, so the per-pivot branch cannot diverge
+// across the team and no shared array is needed.
+inline int spchol_width(int a1, int a2) { return a2 - a1 - 1; }
+inline unsigned long long spchol_work(int a1, int a2) {
+    const unsigned long long w = (unsigned long long)spchol_width(a1, a2);
+    return w * (w + 1ULL) / 2ULL; // matched updates under suffix containment
+}
+
+// One k1 column's updates. Identical arithmetic and identical order to the original loop body.
+inline void spchol_k1(SparseMatrix &aMat, int *diagonalIndex, int k1, int indexA2) {
+    const dd_real a = aMat.sp_ele[k1]; // row i is read-only here, so a copy is safe and cheap
+    int k3 = diagonalIndex[aMat.column_index[k1]];
+    const int indexB2 = diagonalIndex[aMat.column_index[k1] + 1];
+    for (int k2 = k1; k2 < indexA2; ++k2) {
+        const dd_real b = aMat.sp_ele[k2];
+        const int tmp3 = aMat.column_index[k2];
+        // k3 is a MONOTONE cursor across k2 -- never reset. That keeps the search amortised and
+        // is correct only because column indices ascend within a segment.
+        for (; k3 < indexB2; ++k3) {
+            if (aMat.column_index[k3] == tmp3) {
+                aMat.sp_ele[k3] -= a * b;
+                k3++;
+                break;
+            }
+        }
+    }
+}
+
+// Bounded env override of a compile-time default. Strict: a malformed value is fatal rather than
+// silently ignored, and it is parsed ONCE at the entry point so no code path can skip validation.
+unsigned long long spchol_gate(const char *name, unsigned long long dflt) {
+    const char *e = getenv(name);
+    if (e == NULL || e[0] == '\0') {
+        return dflt;
+    }
+    errno = 0;
+    char *end = NULL;
+    const unsigned long long v = strtoull(e, &end, 10);
+    if (end == e || *end != '\0' || errno == ERANGE) {
+        rError(name << " must be a non-negative integer (got \"" << e << "\")");
+    }
+    return v;
+}
+
+// unset/auto -> gated; serial -> never thread; force -> thread every pivot (test/benchmark).
+enum SpcholMode { SPCHOL_AUTO, SPCHOL_SERIAL, SPCHOL_FORCE };
+SpcholMode spchol_mode() {
+    const char *e = getenv("SDPA_SPCHOL_MODE");
+    if (e == NULL || e[0] == '\0' || strcmp(e, "auto") == 0) {
+        return SPCHOL_AUTO;
+    }
+    if (strcmp(e, "serial") == 0) {
+        return SPCHOL_SERIAL;
+    }
+    if (strcmp(e, "force") == 0) {
+        return SPCHOL_FORCE;
+    }
+    // Strict: an unrecognised mode is refused, never treated as the default. A silent fallback
+    // would let a typo run the very path the caller was trying to select against.
+    rError("SDPA_SPCHOL_MODE must be auto, serial or force (got \"" << e << "\")");
+    return SPCHOL_AUTO;
+}
+
+// Parse-and-validate every spchol tunable exactly once per process, on the first Cholesky of
+// EITHER route. Called from both getCholesky overloads, because a problem whose bMat routes dense
+// never reaches the sparse one -- and a validator only one path can reach is not a validator.
+// (Caught by its own negative test: with this inside the sparse overload alone,
+// SDPA_SPCHOL_MODE=bogus was silently accepted on a dense-route problem.)
+struct SpcholCfg {
+    SpcholMode mode;
+    unsigned long long gate_work;
+    unsigned long long gate_width;
+    bool log;
+};
+
+const SpcholCfg &spchol_cfg() {
+    static bool done = false;
+    static SpcholCfg c;
+    if (!done) {
+        c.mode = spchol_mode();
+        c.gate_work = spchol_gate("SDPA_DD_MIN_SPCHOL_WORK", SDPA_DD_MIN_SPCHOL_WORK);
+        c.gate_width = spchol_gate("SDPA_DD_MIN_SPCHOL_WIDTH", SDPA_DD_MIN_SPCHOL_WIDTH);
+        c.log = (getenv("SDPA_SPCHOL_LOG") != NULL);
+        done = true;
+    }
+    return c;
+}
+
+} // namespace
 
 dd_real Lal::getMinEigen(DenseMatrix &lMat, DenseMatrix &xMat, DenseMatrix &Q, Vector &out, Vector &b, Vector &r, Vector &q, Vector &qold, Vector &w, Vector &tmp, Vector &diagVec, Vector &diagVec2, Vector &workVec) {
     dd_real alpha, beta, value;
@@ -300,6 +432,7 @@ bool Lal::getInnerProduct(dd_real &ret, SparseMatrix &aMat, DenseMatrix &bMat) {
 }
 
 bool Lal::getCholesky(DenseMatrix &retMat, DenseMatrix &aMat) {
+    (void)spchol_cfg(); // validate the spchol tunables even when this problem routes dense
     if (retMat.nRow != aMat.nRow || retMat.nCol != aMat.nCol || retMat.type != aMat.type) {
         rError("getCholesky:: different memory size");
     }
@@ -374,50 +507,163 @@ bool Lal::getCholesky(DenseMatrix &retMat, DenseMatrix &aMat) {
 // is otherwise untouched. Proven bit-identical with patches/regress.sh (10 problems,
 // including truss6, the only problem in a 93-problem census that reaches this
 // function at all).
-bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
-    int nDIM = aMat.nRow;
-    int indexA1, indexA2, indexB2;
-    int i, k1, k2, k3;
-    dd_real tmp, tmp2;
-    int tmp3;
+namespace {
 
+// The untouched serial factorisation. Kept as its own routine so that SDPA_SPCHOL_MODE=serial,
+// a one-member team, and a build without OpenMP all run THE SAME code rather than an emulation
+// of it inside a parallel region.
+bool spchol_serial(SparseMatrix &aMat, int *diagonalIndex) {
+    const int nDIM = aMat.nRow;
+    for (int i = 0; i < nDIM; ++i) {
+        const int a1 = diagonalIndex[i], a2 = diagonalIndex[i + 1];
+        if (!(aMat.sp_ele[a1] > 0.0)) {
+            // Non-positive (or NaN) pivot: the Schur complement is not positive
+            // definite, so there is no Cholesky factor to return. Say so.
+            rMessage("sparse cholesky miss condition :: not positive definite"
+                     << " :: pivot " << i << " = " << aMat.sp_ele[a1]);
+            return FAILURE;
+        }
+        aMat.sp_ele[a1] = 1.0 / sqrt(aMat.sp_ele[a1]); // inverse diagonal
+        for (int k1 = a1 + 1; k1 < a2; ++k1) {
+            aMat.sp_ele[k1] *= aMat.sp_ele[a1];
+        }
+        for (int k1 = a1 + 1; k1 < a2; ++k1) {
+            spchol_k1(aMat, diagonalIndex, k1, a2);
+        }
+    }
+    return _SUCCESS;
+}
+
+} // namespace
+
+bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
     if (aMat.type != SparseMatrix::SPARSE) {
         rError("Lal::getCholesky aMat is not sparse format");
     }
 
-    for (i = 0; i < nDIM; ++i) {
-        indexA1 = diagonalIndex[i];
-        indexA2 = diagonalIndex[i + 1];
-        if (!(aMat.sp_ele[indexA1] > 0.0)) {
-            // Non-positive (or NaN) pivot: the Schur complement is not positive
-            // definite, so there is no Cholesky factor to return. Say so.
-            rMessage("sparse cholesky miss condition :: not positive definite"
-                     << " :: pivot " << i << " = " << aMat.sp_ele[indexA1]);
-            return FAILURE;
+    // Validated on the first Cholesky of either route (see spchol_cfg), so a malformed value is
+    // refused whether or not this problem's bMat routes sparse.
+    const SpcholCfg &cfg = spchol_cfg();
+    const SpcholMode mode = cfg.mode;
+    const unsigned long long gate_work = cfg.gate_work;
+    const unsigned long long gate_width = cfg.gate_width;
+    const bool want_log = cfg.log;
+
+#ifdef _OPENMP
+    const int team = (mode == SPCHOL_SERIAL) ? 1 : omp_get_max_threads();
+#else
+    const int team = 1;
+#endif
+    if (team < 2) {
+        if (want_log) {
+            rMessage("spchol: serial (team=" << team << ", mode=" << (int)mode << ")");
         }
-        // inverse diagonal
-        aMat.sp_ele[indexA1] = 1.0 / sqrt(aMat.sp_ele[indexA1]);
-        for (k1 = indexA1 + 1; k1 < indexA2; ++k1) {
-            aMat.sp_ele[k1] *= aMat.sp_ele[indexA1];
-        }
-        for (k1 = indexA1 + 1; k1 < indexA2; ++k1) {
-            tmp = aMat.sp_ele[k1];
-            k3 = diagonalIndex[aMat.column_index[k1]];
-            indexB2 = diagonalIndex[aMat.column_index[k1] + 1];
-            for (k2 = k1; k2 < indexA2; ++k2) {
-                tmp2 = aMat.sp_ele[k2];
-                tmp3 = aMat.column_index[k2];
-                for (; k3 < indexB2; ++k3) {
-                    if (aMat.column_index[k3] == tmp3) {
-                        aMat.sp_ele[k3] -= tmp * tmp2;
-                        k3++;
-                        break;
+        return spchol_serial(aMat, diagonalIndex);
+    }
+
+#ifdef _OPENMP
+    const int nDIM = aMat.nRow;
+    const bool force = (mode == SPCHOL_FORCE);
+    bool fail = false;
+    int failed_pivot = -1;
+    bool one_thread = false, one_thread_r = false;
+    unsigned long long pivots_par = 0, pivots_seq = 0;
+    int actual = 1, max_width = 0;
+
+#pragma omp parallel num_threads(team) default(none)                                        \
+    shared(aMat, diagonalIndex, fail, failed_pivot, one_thread, one_thread_r,               \
+           pivots_par, pivots_seq, actual, max_width)                                        \
+    firstprivate(nDIM, force, gate_work, gate_width)
+    {
+        // THE team, read inside the region that owns it. num_threads() is a REQUEST: OMP_DYNAMIC
+        // or a resource limit may return fewer threads, including one, and OpenMP does not
+        // promise two consecutive regions get the same team. Probing with a throwaway region and
+        // dispatching on its answer would be an unwarranted inference about this one.
+        //
+        // The branch is COLLECTIVE: every thread evaluates the same team size, so none takes a
+        // different path and the worksharing constructs below are encountered by all of them in
+        // the same order. With one thread, that thread runs the untouched serial routine.
+        const int here = omp_get_num_threads();
+        if (here < 2) {
+            one_thread = true;
+            one_thread_r = spchol_serial(aMat, diagonalIndex);
+        } else {
+#pragma omp single
+            { actual = here; }
+
+            for (int i = 0; i < nDIM; ++i) {
+                const int a1 = diagonalIndex[i], a2 = diagonalIndex[i + 1];
+                // Only the pivot test and its inverse square root are inherently one-thread work.
+#pragma omp single
+                {
+                    if (!(aMat.sp_ele[a1] > 0.0)) {
+                        fail = true;
+                        failed_pivot = i;
+                    } else {
+                        aMat.sp_ele[a1] = 1.0 / sqrt(aMat.sp_ele[a1]);
+                    }
+                } // implicit barrier: publishes fail and the inverted diagonal
+                if (fail)
+                    break; // identical in every thread, so the worksharing sequence stays identical
+
+                // Row scaling, shared out rather than left on one thread: it is O(L_i) per pivot
+                // and O(nnz) over the factorisation, so leaving it serial puts an Amdahl floor
+                // under the routine that only bites once the update loop is fast. Elementwise and
+                // independent -- each k1 writes its own element and reads only the already
+                // published diagonal -- so this is bit-identical.
+#pragma omp for
+                for (int k1 = a1 + 1; k1 < a2; ++k1)
+                    aMat.sp_ele[k1] *= aMat.sp_ele[a1];
+                // implicit barrier: the scaled row must be complete before any update reads it
+
+                // Same predicate in every thread -- derived only from values all of them have.
+                const bool par = force || (spchol_work(a1, a2) >= gate_work &&
+                                           (unsigned long long)spchol_width(a1, a2) >= gate_width);
+                if (par) {
+#pragma omp single
+                    {
+                        pivots_par++;
+                        if (spchol_width(a1, a2) > max_width)
+                            max_width = spchol_width(a1, a2);
+                    }
+#pragma omp for schedule(dynamic)
+                    for (int k1 = a1 + 1; k1 < a2; ++k1)
+                        spchol_k1(aMat, diagonalIndex, k1, a2);
+                    // implicit barrier: pivot i completes before i+1 begins. NEVER nowait.
+                } else {
+                    // Too small to share out. One thread does it; the end barrier is retained so
+                    // the team stays in lockstep across pivots.
+#pragma omp single
+                    {
+                        pivots_seq++;
+                        for (int k1 = a1 + 1; k1 < a2; ++k1)
+                            spchol_k1(aMat, diagonalIndex, k1, a2);
                     }
                 }
             }
         }
     }
+
+    if (one_thread) {
+        if (want_log) {
+            rMessage("spchol: requested team=" << team << " but received 1; ran serial");
+        }
+        return one_thread_r;
+    }
+    if (want_log) {
+        // Non-vacuity evidence: a caller can see whether any pivot actually ran threaded, rather
+        // than inferring it from a wall-clock difference.
+        rMessage("spchol: team=" << actual << " pivots_threaded=" << pivots_par
+                                << " pivots_serial=" << pivots_seq << " max_width=" << max_width
+                                << " gate_work=" << gate_work << " gate_width=" << gate_width);
+    }
+    if (fail) {
+        rMessage("sparse cholesky miss condition :: not positive definite"
+                 << " :: pivot " << failed_pivot);
+        return FAILURE;
+    }
     return _SUCCESS;
+#endif
 }
 
 bool Lal::getInvLowTriangularMatrix(DenseMatrix &retMat, DenseMatrix &aMat) {
