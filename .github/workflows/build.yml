@@ -1094,10 +1094,64 @@ jobs:
             || { echo "FAIL: the independent legacy arm disagrees with the threaded path" >&2; exit 1; }
           echo "  (3) legacy oracle agrees with serial and threaded, byte for byte"
 
+          # (4) The ASSEMBLY oracle can reject. Both arms threaded, same build, so the only
+          #     difference is the injected one-ulp change.
+          for tag in clean mut; do
+            ex=""; [ $tag = mut ] && ex="SDPA_BMAT_ASM_MUTATE=1"
+            rm -f /tmp/am.$tag
+            env $ex SDPA_BMAT_MODE=sparse SDPA_BMAT_ASM_MODE=parallel \
+              SDPA_BMAT_ASM_DUMP=/tmp/am.$tag OMP_NUM_THREADS=4 \
+              ./sdpa_dd -ds spchol_fix.dat-s -o /tmp/amo.$tag -p param.sdpa >/dev/null 2>&1
+          done
+          if cmp -s /tmp/am.clean /tmp/am.mut; then
+            echo "FAIL: a one-ulp change to the assembled matrix did not change its stream." >&2
+            echo "      The assembly oracle is BLIND, so the comparison above proves nothing." >&2
+            exit 1
+          fi
+          echo "  (4) assembly oracle detects a one-ulp change"
+
           # Restore a release build for any later step.
           make clean >/dev/null 2>&1 || true
           ./configure --enable-openmp=yes >/dev/null
           make -j"$(nproc)" >/dev/null
+      - name: threaded bMat assembly -- identical matrix, and really threaded
+        run: |
+          set -e
+          python3 tests/gen_spchol_fixture.py > spchol_fix.dat-s
+          # Forced both ways so the comparison is like-for-like, and the assembly's OWN stream
+          # is what is compared -- not the factor's. The factor is computed FROM the assembled
+          # matrix, so a Cholesky insensitive to a small assembly error would mask it.
+          rm -f /tmp/asm.*
+          for am in serial parallel; do
+            SDPA_BMAT_MODE=sparse SDPA_BMAT_ASM_MODE=$am SDPA_BMAT_ASM_DUMP=/tmp/asm.$am \
+              SDPA_BMAT_ASM_LOG=1 OMP_NUM_THREADS=4 \
+              ./sdpa_dd -ds spchol_fix.dat-s -o /tmp/ao.$am -p param.sdpa > /tmp/al.$am 2>&1
+            [ -s /tmp/asm.$am ] || { echo "FAIL: no assembly stream for mode=$am" >&2; exit 1; }
+          done
+          cmp /tmp/asm.serial /tmp/asm.parallel \
+            || { echo "FAIL: the threaded assembly built a DIFFERENT matrix" >&2; exit 1; }
+          echo "  assembly byte-identical serial vs parallel ($(wc -c < /tmp/asm.serial) bytes)"
+          # Non-vacuity: it must actually have threaded, and executed every group.
+          grep -aoE "bmat asm: team=[0-9]+ groups=[0-9]+ groups_executed=[0-9]+" /tmp/al.parallel | head -1
+          t=$(sed -n 's/.*bmat asm: team=\([0-9]*\).*/\1/p' /tmp/al.parallel | head -1)
+          g=$(sed -n 's/.*groups=\([0-9]*\) .*/\1/p'         /tmp/al.parallel | head -1)
+          e=$(sed -n 's/.*groups_executed=\([0-9]*\).*/\1/p'  /tmp/al.parallel | head -1)
+          [ "${t:-0}" -ge 2 ] \
+            || { echo "FAIL: assembly ran with team=${t:-0} -- this comparison is vacuous" >&2; exit 1; }
+          [ "${e:-0}" = "${g:-1}" ] \
+            || { echo "FAIL: ${e:-0} of ${g:-?} groups executed -- work was dropped" >&2; exit 1; }
+          echo "  team=$t, all $e groups executed"
+          # Across thread counts too.
+          for th in 1 2 4; do
+            rm -f /tmp/at.$th
+            SDPA_BMAT_MODE=sparse SDPA_BMAT_ASM_MODE=parallel SDPA_BMAT_ASM_DUMP=/tmp/at.$th \
+              OMP_NUM_THREADS=$th ./sdpa_dd -ds spchol_fix.dat-s -o /tmp/ai.$th -p param.sdpa >/dev/null 2>&1
+          done
+          for th in 2 4; do
+            cmp /tmp/at.1 /tmp/at.$th \
+              || { echo "FAIL: assembly differs between 1 and $th threads" >&2; exit 1; }
+          done
+          echo "  assembly byte-identical across 1/2/4 threads"
       - name: a forced mode forces or fails, never downgrades
         run: |
           set -e
