@@ -96,9 +96,13 @@ against 71.9 s) — but that is one machine and one problem set. See BENCHMARKS.
 
 | | 1 thread | 24 threads | speedup |
 |---|---:|---:|---:|
-| dE4, sparse route (its default) | 46.6 s | **9.2 s** | **5.07×** |
-| dE3, dense route (its default) | 177.7 s | 22.6 s | 7.89× |
-| dE3, sparse route (`SDPA_BMAT_MODE=fill`) | — | **6.5 s** | 3.45× vs its own default |
+| dE4, sparse route (its default) | 46.6 s | **6.5 s** | **7.18×** |
+| dE3, dense route (its default) | 177.7 s | 22.7 s | 7.83× |
+| dE3, sparse route (`SDPA_BMAT_MODE=fill`) | — | **4.5 s** | 5.06× vs its own default |
+
+These are `main loop time` over a **fixed 4-iteration budget** — per-iteration solver cost, not
+time to solution. Neither problem converges at double-double precision under any tolerance dd can
+reach, so no solve time exists for them to quote.
 
 ## Route selection, and the one knob worth knowing
 
@@ -107,7 +111,7 @@ against 71.9 s) — but that is one machine and one problem set. See BENCHMARKS.
 treated as `auto`.
 
 **`fill` is opt-in and can be a large win on large sparse problems.** On dE3 it takes the route
-`auto` declines: **6.5 s against 22.5 s, and 277 MB against 670 MB** — 3.4× faster on 2.4× less
+`auto` declines: **4.5 s against 22.7 s, and 277 MB against 670 MB** — 5.1× faster on 2.4× less
 memory. It is not the default because the timings behind that decision cover two problem
 structures so far, not the seven the route census identifies. `SDPA_BMAT_LOG=1` prints which gate
 decided and why.

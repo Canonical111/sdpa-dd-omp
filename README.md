@@ -22,8 +22,16 @@ The four patches above are the original port. The fork has since gained substant
 a ten-item correctness batch (exit statuses, container ownership, input bounds, an
 uninitialised-read fix), record-bounded input parsing with line-numbered diagnostics, threaded
 Cholesky panel kernels and X/Z inverse-Cholesky triangulars behind measured work gates,
-hardware FMA for the bundled QD on aarch64, and the FP-contraction pin described below. Each
-change carries its evidence in its commit message; [BENCHMARKS.md](BENCHMARKS.md) holds the
+hardware FMA for the bundled QD on aarch64, and the FP-contraction pin described below.
+
+Since then the two remaining serial regions on the large-sparse path have been threaded: the
+**sparse Schur-complement Cholesky** and the **sparse Schur-complement assembly**. Together they
+take dE4 (m=7401) from 46.6 s to **6.5 s at default settings**, a **7.2×** whole-solver speedup on
+24 cores, with the factor and the assembled matrix both **bit-identical at any thread count** —
+verified by comparing the structures themselves, not the printed solution. Every runtime knob is
+documented in [RUNTIME.md](RUNTIME.md).
+
+Each change carries its evidence in its commit message; [BENCHMARKS.md](BENCHMARKS.md) holds the
 regenerated tables.
 
 Every modified or added source file carries an in-file, dated change notice naming its own
