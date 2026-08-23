@@ -391,6 +391,22 @@ const SpcholCfg &spchol_cfg() {
     static SpcholCfg c;
     if (!done) {
         c.mode = spchol_mode();
+#ifndef _OPENMP
+        /* A forced mode must FORCE or FAIL, never silently downgrade. dd ran
+           SDPA_SPCHOL_MODE=force serially in a build without OpenMP because `team` became 1
+           before dispatch, so a benchmark that believed it measured the threaded path measured
+           the serial one and said nothing.
+
+           Checked HERE, in the once-per-process config, and not in the sparse getCholesky where
+           it was first written: a dense-route problem never enters that overload, so the check
+           was unreachable for exactly the inputs CI uses. Fifth occurrence of that shape in this
+           fork -- CI caught it, the local test could not, because the no-OpenMP build failed to
+           link for an unrelated reason and the check was never actually exercised. */
+        if (c.mode == SPCHOL_FORCE) {
+            rError("SDPA_SPCHOL_MODE=force was requested but this binary was built without"
+                   " OpenMP, so there is no parallel path to take");
+        }
+#endif
         c.gate_work = spchol_gate("SDPA_DD_MIN_SPCHOL_WORK", SDPA_DD_MIN_SPCHOL_WORK);
         c.gate_width = spchol_gate("SDPA_DD_MIN_SPCHOL_WIDTH", SDPA_DD_MIN_SPCHOL_WIDTH);
         c.gate_total = spchol_gate("SDPA_DD_MIN_SPCHOL_TOTAL", SDPA_DD_MIN_SPCHOL_TOTAL);
@@ -908,16 +924,6 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
     const unsigned long long gate_width = cfg.gate_width;
     const bool want_log = cfg.log;
 
-#ifndef _OPENMP
-    // A forced mode must FORCE or FAIL, never silently downgrade. Until now dd ran
-    // SDPA_SPCHOL_MODE=force serially in a build without OpenMP, because `team` became 1 before
-    // dispatch -- so a benchmark that believed it was measuring the threaded path measured the
-    // serial one and said nothing. auto and serial keep the serial path, which is what they mean.
-    if (mode == SPCHOL_FORCE) {
-        rError("SDPA_SPCHOL_MODE=force was requested but this binary was built without OpenMP,"
-               " so there is no parallel path to take");
-    }
-#endif
     if (mode == SPCHOL_LEGACY) {
         // The oracle arm: no team, no gates, no shared kernel. Taken before any OpenMP
         // decision so that what it factors cannot depend on the threading configuration.
