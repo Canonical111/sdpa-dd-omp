@@ -25,6 +25,9 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
 #include <sdpa_chordal.h>
 
+#include <cerrno>
+#include <climits>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
@@ -271,6 +274,17 @@ int Chordal::countNonZero(int m, IVL *symbfacIVL) {
     }
 
     delete[] bnode;
+    // Representability guard. Every caller returns `nonzeros * 2 - m`, so the DOUBLED value is
+    // what has to fit in the int they return, not the count itself. Validate in 64 bits and
+    // then narrow: the multiplication would otherwise overflow silently, and a negative or
+    // wrapped fill count would be compared against the gate-4 cutoff as if it were small,
+    // routing a problem too large for either representation straight into the sparse path.
+    if ((long long)nonzeros * 2LL - (long long)m > (long long)INT_MAX ||
+        (long long)nonzeros > (long long)INT_MAX) {
+        rError("Chordal::countNonZero: the symbolic factor has " << nonzeros
+               << " stored entries, so 2*nnz-m exceeds INT_MAX=" << INT_MAX
+               << ". This problem is too large for either bMat representation in this build.");
+    }
     return nonzeros;
 }
 
@@ -381,6 +395,47 @@ enum BMatMode { BMAT_AUTO, BMAT_FILL, BMAT_DENSE, BMAT_SPARSE };
 // without silently changing gate 2.
 const double BMAT_FILL_BLOCK_FRACTION = 0.5;
 
+// Cap on the DENSE bMat allocation, in GB. Absent means no cap requested; present-but-empty is
+// an error rather than "unset", because SDPA_BMAT_MAX_GB="$TYPO" is the case worth catching.
+// dd-SPECIFIC BYTE ACCOUNTING: gmp estimates from limb counts at a runtime precision. A dd_real
+// is a fixed pair of doubles, so the dense bMat is exactly m*m*sizeof(dd_real) -- no precision
+// term, and nothing to look up at runtime.
+double bmat_max_gb() {
+    const char *e = getenv("SDPA_BMAT_MAX_GB");
+    if (e == NULL) {
+        return -1.0;
+    }
+    if (e[0] == '\0') {
+        rError("SDPA_BMAT_MAX_GB is set but empty; unset it to request no cap");
+    }
+    errno = 0;
+    char *end = NULL;
+    const double v = strtod(e, &end);
+    if (end == e || *end != '\0' || errno == ERANGE || !(v > 0.0) || !std::isfinite(v)) {
+        rError("SDPA_BMAT_MAX_GB must be a positive finite number of GB (got \"" << e << "\")");
+    }
+    return v;
+}
+
+// Enforced on EVERY route to a dense bMat -- gate 1, gate 2, gate 3, gate 4 and forced dense --
+// rather than at one of them, because a cap only some paths consult is not a cap.
+void bmat_dense_cap_check(int m, const char *why) {
+    const double cap = bmat_max_gb();
+    if (cap < 0.0) {
+        return;
+    }
+    // m*m in 64 bits: the product overflows int for m > 46341, and this check exists precisely
+    // for the large problems where that matters.
+    const double bytes = (double)m * (double)m * (double)sizeof(dd_real);
+    const double gb = bytes / (1024.0 * 1024.0 * 1024.0);
+    if (gb > cap) {
+        rError("dense bMat for m=" << m << " needs " << gb << " GB (" << sizeof(dd_real)
+               << " B/element), over the SDPA_BMAT_MAX_GB cap of " << cap
+               << " GB; route chosen by " << why
+               << ". Raise the cap, or use SDPA_BMAT_MODE=fill/sparse if the problem admits it.");
+    }
+}
+
 BMatMode bmat_mode() {
     const char *e = getenv("SDPA_BMAT_MODE");
     if (e == NULL || e[0] == '\0' || strcmp(e, "auto") == 0) {
@@ -416,6 +471,7 @@ void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut
     if (mode == BMAT_DENSE) {
         if (want_log)
             rMessage("bmat: mode=dense (forced) -> DENSE");
+        bmat_dense_cap_check(m, "forced dense");
         best = -1;
         return;
     }
@@ -423,6 +479,7 @@ void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut
         if ((m <= m_threshold) || (nBlock <= b_threshold)) {
             if (want_log)
                 rMessage("bmat: gate1 m=" << m << " nBlock=" << nBlock << " -> DENSE");
+            bmat_dense_cap_check(m, "gate 1");
             best = -1;
             return;
         }
@@ -430,6 +487,7 @@ void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut
             if (inputData.SDP_nConstraint[b] > g2) {
                 if (want_log)
                     rMessage("bmat: gate2 SDP block " << b << " -> DENSE");
+                bmat_dense_cap_check(m, "gate 2");
                 best = -1;
                 return;
             }
@@ -438,6 +496,7 @@ void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut
             if (inputData.SOCP_nConstraint[b] > g2) {
                 if (want_log)
                     rMessage("bmat: gate2 SOCP block " << b << " -> DENSE");
+                bmat_dense_cap_check(m, "gate 2");
                 best = -1;
                 return;
             }
@@ -446,6 +505,7 @@ void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut
             if (inputData.LP_nConstraint[b] > g2) {
                 if (want_log)
                     rMessage("bmat: gate2 LP block " << b << " -> DENSE");
+                bmat_dense_cap_check(m, "gate 2");
                 best = -1;
                 return;
             }
@@ -462,6 +522,7 @@ void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut
             rMessage("bmat: gate3 aggregate=" << IVL_tsize(adjIVL) << " cutoff=" << g3
                                               << (mode == BMAT_FILL ? " [fill policy]" : "")
                                               << " -> DENSE");
+        bmat_dense_cap_check(m, "gate 3");
         best = -1;
         Graph_free(graph);
         return;
@@ -538,6 +599,7 @@ void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut
         if (want_log)
             rMessage("bmat: gate4 fill=" << Method[best] << " cutoff="
                                          << extend_threshold * m * (double)m << " -> DENSE");
+        bmat_dense_cap_check(m, "gate 4");
         best = -1;
     } else if (want_log) {
         rMessage("bmat: gate4 fill=" << Method[best] << " -> SPARSE");
