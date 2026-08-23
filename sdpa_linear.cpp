@@ -40,10 +40,13 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
    the factor. `dd_real` is a 16-byte value type: the same expression allocates nothing and has
    no runtime precision, so the scratch, its plumbing and that invariant do not exist here.
 
-   THE GATES ARE UNCALIBRATED FOR dd. A dd multiply-add is roughly an order of magnitude cheaper
+   THE GATES ARE dd's OWN, NOT gmp's. A dd multiply-add is roughly an order of magnitude cheaper
    than an mpf one at 256 bits, so break-even sits at MORE updates, not fewer, and gmp's values
-   must not be copied. The defaults below are deliberately conservative floors against pathology;
-   calibrate on the target machine before claiming any of them is a tuned optimum. */
+   must not be copied. The defaults below were swept on dd -- see the calibration table at the
+   SDPA_DD_MIN_SPCHOL_WORK definition -- but on ONE machine (i9-13900K). They are a measured knee
+   on that host, not a cross-architecture optimum: a machine with a costlier barrier or a
+   different memory system may want a higher floor, and both gates are overridable at runtime
+   precisely so that re-calibrating needs no rebuild. */
 
 #include <sdpa_linear.h>
 #include <sdpa_dataset.h>
@@ -52,6 +55,9 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 #include <cstring>
 #include <cerrno>
 #include <climits>
+#include <cstdio>
+#include <cmath>
+#include <stdint.h>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -146,6 +152,168 @@ SpcholMode spchol_mode() {
     return SPCHOL_AUTO;
 }
 
+// ------------------------------------------------------------- the factor-level oracle
+//
+// Everything else here compares the PRINTED SOLUTION: objective, phase, iteration count. That
+// is a real check, but it is NOT the claim the threading makes. The claim is that the FACTOR is
+// bit-identical at any team size, and two factors can differ deep in the mantissa while still
+// printing the same 17 digits -- so "identical printed output" is consistent with a factor that
+// changed. Ported from gmp's SPCHOLv2 stream, which exists for exactly this reason.
+//
+// The dd port is SIMPLER AND STRICTLY MORE EXACT than gmp's. gmp must serialise an mpf_class
+// through mpf_get_str in base 16 to avoid decimal rounding, and must record each element's
+// runtime precision because two mpf values of different precision are different values. A
+// `dd_real` is a POD pair of IEEE-754 doubles with no runtime precision, so its exact value IS
+// its 128 bits: hashing the two bit patterns needs no string conversion, no allocation, no
+// locale and no rounding argument at all. Same framing, same FNV-1a, same dump mode.
+//
+// Framing: every variable-length field is preceded by its length and every element record by a
+// tag, so that two different factors cannot serialise to the same byte stream by concatenation
+// ambiguity -- ("ab","c") and ("a","bc") must not collide.
+//
+// Two outputs, answering different questions:
+//   SDPA_SPCHOL_DIGEST=1      a 64-bit fingerprint plus record and byte counts. Cheap, enough
+//                             to DETECT a change -- a fingerprint, not a proof, and it is
+//                             described that way wherever it is printed.
+//   SDPA_SPCHOL_DIGEST_DUMP=f the canonical stream itself, appended to f, so two runs are
+//                             compared with cmp(1): byte identity of the whole stream rather
+//                             than equality of a hash. This is the proof-grade comparison.
+//
+// Off unless asked for -- O(nnz) work is fine for a fixture and not something to pay for in a
+// solve.
+struct SpcholDigest {
+    uint64_t fnv;     // FNV-1a over the framed stream
+    uint64_t records; // elements emitted
+    uint64_t bytes;   // length of the framed stream
+    FILE *dump;       // optional exact-comparison sink; NULL to only fingerprint
+    bool io_error;    // a write failed, so what is on disk is NOT what `bytes` claims
+};
+
+void spchol_dg_byte(SpcholDigest &d, unsigned char c) {
+    d.fnv ^= (uint64_t)c;
+    d.fnv *= 1099511628211ULL;
+    d.bytes++;
+    if (d.dump != NULL && !d.io_error) {
+        // Checked, because `bytes` counts what was ATTEMPTED. A disk-full or quota error would
+        // otherwise leave a truncated dump while the log reported a full-length stream, and a
+        // comparison against a truncated file is not a comparison.
+        if (fputc((int)c, d.dump) == EOF)
+            d.io_error = true;
+    }
+}
+
+void spchol_dg_u64(SpcholDigest &d, uint64_t v) {
+    // Explicit little-endian byte order, and unsigned throughout: shifting a signed value right
+    // is implementation-defined for negatives, and an implicit host byte order would make the
+    // stream non-portable between machines that are supposed to produce identical bytes.
+    for (int b = 0; b < 8; ++b)
+        spchol_dg_byte(d, (unsigned char)((v >> (8 * b)) & 0xffU));
+}
+
+void spchol_dg_i64(SpcholDigest &d, long long v) {
+    spchol_dg_u64(d, (uint64_t)v); // two's complement, well defined as a conversion
+}
+
+void spchol_dg_bytes(SpcholDigest &d, const char *p, size_t n) {
+    spchol_dg_u64(d, (uint64_t)n); // the length frame
+    for (size_t i = 0; i < n; ++i)
+        spchol_dg_byte(d, (unsigned char)p[i]);
+}
+
+// The exact value of a double, as its IEEE-754 bit pattern. memcpy rather than a union or a
+// pointer cast: type-punning through either is undefined, and this is the one place where
+// getting the bits wrong would silently weaken every comparison built on them.
+void spchol_dg_double(SpcholDigest &d, double x) {
+    uint64_t bits = 0;
+    memcpy(&bits, &x, sizeof bits);
+    spchol_dg_u64(d, bits);
+}
+
+SpcholDigest spchol_digest(SparseMatrix &aMat, int *diagonalIndex, int nDIM, FILE *dump) {
+    SpcholDigest d;
+    d.fnv = 14695981039346656037ULL; // the FNV-1a offset basis
+    d.records = 0;
+    d.bytes = 0;
+    d.dump = dump;
+    d.io_error = false;
+
+    // Header record: STRUCTURE first. A factor with the same values in a different sparsity
+    // pattern is a different factor, and a digest over values alone would call the two equal.
+    const char *tag = "DDSPCHOLv1"; // dd's own tag: a dd stream must never compare equal to gmp's
+    spchol_dg_bytes(d, tag, strlen(tag));
+    spchol_dg_i64(d, (long long)aMat.type);
+    spchol_dg_i64(d, aMat.nRow);
+    spchol_dg_i64(d, aMat.nCol);
+    spchol_dg_i64(d, aMat.NonZeroNumber);
+    spchol_dg_i64(d, aMat.NonZeroCount);
+    spchol_dg_i64(d, aMat.NonZeroEffect);
+    spchol_dg_i64(d, nDIM);
+    spchol_dg_u64(d, (uint64_t)(nDIM + 1));
+    for (int i = 0; i <= nDIM; ++i)
+        spchol_dg_i64(d, diagonalIndex[i]);
+
+    spchol_dg_u64(d, (uint64_t)aMat.NonZeroCount);
+    for (int k = 0; k < aMat.NonZeroCount; ++k) {
+        spchol_dg_byte(d, 'E'); // record tag
+        spchol_dg_i64(d, k);
+        spchol_dg_i64(d, aMat.row_index[k]);
+        spchol_dg_i64(d, aMat.column_index[k]);
+        // Both limbs, high then low. The low limb is the whole point: a reordered summation
+        // changes it long before it changes anything the solver prints.
+        spchol_dg_double(d, aMat.sp_ele[k].x[0]);
+        spchol_dg_double(d, aMat.sp_ele[k].x[1]);
+        d.records++;
+    }
+    spchol_dg_byte(d, '.'); // terminator, so a truncated stream cannot look complete
+    return d;
+}
+
+bool spchol_want_digest() {
+    const char *e = getenv("SDPA_SPCHOL_DIGEST");
+    return e != NULL && e[0] != '\0' && strcmp(e, "0") != 0;
+}
+
+// Exact-comparison sink. APPENDED to, so one file holds every factorisation of a solve in order
+// and two runs compare with cmp(1) -- byte identity of the whole stream, not equality of a hash.
+const char *spchol_dump_path() {
+    const char *e = getenv("SDPA_SPCHOL_DIGEST_DUMP");
+    if (e == NULL || e[0] == '\0')
+        return NULL;
+    return e;
+}
+
+// TEST-ONLY, behind its own compile gate: perturb the middle diagonal of the FINISHED factor by
+// one ulp. This is the digest's NEGATIVE CONTROL. Without it, "every arm produced the same
+// fingerprint" is equally consistent with a digest that cannot tell anything apart -- which is
+// the same vacuity trap that SDPA_SPCHOL_LOG exists to close for the threading itself.
+//
+// The middle diagonal is chosen because a successful factorisation guarantees it is nonzero, and
+// the perturbation is applied to the LOW limb so that it is invisible to every printed field and
+// visible only to a digest over the actual bits. nextafter is exact and never a no-op: even at
+// x[1]==0 it yields the smallest denormal, which is still a changed bit pattern.
+//
+// gmp's hook also has a mode 2 that perturbs an element's PRECISION, as the negative control for
+// its uniform-precision invariant. dd has no runtime precision and therefore no such invariant,
+// so that mode does not exist here and the parser says so rather than silently accepting it.
+int spchol_mutate() {
+    const char *e = getenv("SDPA_SPCHOL_MUTATE");
+    if (e == NULL || e[0] == '\0' || strcmp(e, "0") == 0) {
+        return 0;
+    }
+#ifndef SDPA_SPCHOL_TEST_HOOKS
+    rError("SDPA_SPCHOL_MUTATE is a test hook and this binary was not built with"
+           " -DSDPA_SPCHOL_TEST_HOOKS, so the hook does not exist here");
+    return 0;
+#else
+    if (strcmp(e, "1") == 0)
+        return 1;
+    rError("SDPA_SPCHOL_MUTATE must be 0 or 1 (got \"" << e << "\"). gmp's mode 2 perturbs an"
+           " element's precision as the negative control for its uniform-precision invariant;"
+           " dd_real has no runtime precision, so dd has neither that invariant nor that mode");
+    return 0;
+#endif
+}
+
 // Parse-and-validate every spchol tunable exactly once per process, on the first Cholesky of
 // EITHER route. Called from both getCholesky overloads, because a problem whose bMat routes dense
 // never reaches the sparse one -- and a validator only one path can reach is not a validator.
@@ -156,6 +324,9 @@ struct SpcholCfg {
     unsigned long long gate_work;
     unsigned long long gate_width;
     bool log;
+    bool digest;      // fingerprint the finished factor
+    const char *dump; // NULL, or the exact-comparison sink
+    int mutate;       // test hook: the digest's negative control
 };
 
 const SpcholCfg &spchol_cfg() {
@@ -166,9 +337,67 @@ const SpcholCfg &spchol_cfg() {
         c.gate_work = spchol_gate("SDPA_DD_MIN_SPCHOL_WORK", SDPA_DD_MIN_SPCHOL_WORK);
         c.gate_width = spchol_gate("SDPA_DD_MIN_SPCHOL_WIDTH", SDPA_DD_MIN_SPCHOL_WIDTH);
         c.log = (getenv("SDPA_SPCHOL_LOG") != NULL);
+        c.digest = spchol_want_digest();
+        c.dump = spchol_dump_path();
+        c.mutate = spchol_mutate(); // rError()s here on a dense-route problem too, by design
+        if (c.dump != NULL) {
+            // Openability is checked HERE, not at the first factorisation, for the same reason
+            // SDPA_SPCHOL_MODE is parsed here: a check only the sparse route reaches is not a
+            // check. A dense-route problem would otherwise accept an unwritable dump path in
+            // silence and produce no dump, which reads as "nothing to compare" rather than as
+            // the configuration error it is. Opening for append creates the file, which is what
+            // the caller asked for by naming it.
+            FILE *probe = fopen(c.dump, "ab");
+            if (probe == NULL) {
+                rError("SDPA_SPCHOL_DIGEST_DUMP: cannot open \"" << c.dump
+                       << "\" for append");
+            }
+            fclose(probe);
+        }
         done = true;
     }
     return c;
+}
+
+// One place where a completed factorisation is mutated (if asked) and digested (if asked), so
+// that the four exit paths of the sparse getCholesky cannot drift apart -- and in particular so
+// that the SERIAL path digests too. A digest only the threaded path emits could not answer the
+// question it exists for, which is whether serial and threaded produce the same factor.
+bool spchol_finish(SparseMatrix &aMat, int *diagonalIndex, int nDIM, const SpcholCfg &cfg,
+                   bool ok) {
+    if (ok && cfg.mutate == 1 && nDIM > 0) {
+        // One ulp on the low limb: invisible to every printed field, visible to the digest.
+        double &lo = aMat.sp_ele[diagonalIndex[nDIM / 2]].x[1];
+        lo = nextafter(lo, HUGE_VAL);
+    }
+    if (ok && (cfg.digest || cfg.dump != NULL)) {
+        FILE *dump = (cfg.dump != NULL) ? fopen(cfg.dump, "ab") : NULL;
+        if (cfg.dump != NULL && dump == NULL) {
+            rError("SDPA_SPCHOL_DIGEST_DUMP: cannot open \"" << cfg.dump << "\" for append");
+        }
+        SpcholDigest d = spchol_digest(aMat, diagonalIndex, nDIM, dump);
+        if (dump != NULL) {
+            if (fflush(dump) != 0 || ferror(dump) != 0)
+                d.io_error = true;
+            if (fclose(dump) != 0)
+                d.io_error = true;
+        }
+        if (d.io_error) {
+            rError("SDPA_SPCHOL_DIGEST_DUMP: writing \"" << cfg.dump << "\" failed after "
+                   << (unsigned long long)d.bytes << " bytes. The dump is truncated, so any"
+                   << " comparison against it would be meaningless; failing rather than leaving"
+                   << " a file that looks complete.");
+        }
+        // The counts print alongside the fingerprint deliberately: equality of a 64-bit hash is
+        // strong evidence, not proof, and two streams of different length or record count are
+        // not the same factor whatever their hashes do.
+        if (cfg.digest)
+            printf("spchol factor    : %d rows, %llu records, %llu stream bytes,"
+                   " fingerprint %016llx\n",
+                   nDIM, (unsigned long long)d.records, (unsigned long long)d.bytes,
+                   (unsigned long long)d.fnv);
+    }
+    return ok;
 }
 
 } // namespace
@@ -573,7 +802,8 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
         if (want_log) {
             rMessage("spchol: serial (team=" << team << ", mode=" << (int)mode << ")");
         }
-        return spchol_serial(aMat, diagonalIndex);
+        return spchol_finish(aMat, diagonalIndex, aMat.nRow, cfg,
+                             spchol_serial(aMat, diagonalIndex));
     }
 
 #ifdef _OPENMP
@@ -663,7 +893,7 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
         if (want_log) {
             rMessage("spchol: requested team=" << team << " but received 1; ran serial");
         }
-        return one_thread_r;
+        return spchol_finish(aMat, diagonalIndex, nDIM, cfg, one_thread_r);
     }
     if (want_log) {
         // Non-vacuity evidence: a caller can see whether any pivot actually ran threaded, rather
@@ -675,9 +905,9 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
     if (fail) {
         rMessage("sparse cholesky miss condition :: not positive definite"
                  << " :: pivot " << failed_pivot);
-        return FAILURE;
+        return spchol_finish(aMat, diagonalIndex, nDIM, cfg, FAILURE);
     }
-    return _SUCCESS;
+    return spchol_finish(aMat, diagonalIndex, nDIM, cfg, _SUCCESS);
 #endif
 }
 

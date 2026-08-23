@@ -853,12 +853,14 @@ jobs:
           for bad in "SDPA_SPCHOL_MODE=bogus" "SDPA_SPCHOL_MODE=Auto" \
                      "SDPA_DD_MIN_SPCHOL_WORK=abc" "SDPA_DD_MIN_SPCHOL_WIDTH=-" \
                      "SDPA_BMAT_MODE=bogus" "SDPA_BMAT_MODE=Fill" \
-                     "SDPA_BMAT_MAX_GB=" "SDPA_BMAT_MAX_GB=abc" "SDPA_BMAT_MAX_GB=-1"; do
+                     "SDPA_BMAT_MAX_GB=" "SDPA_BMAT_MAX_GB=abc" "SDPA_BMAT_MAX_GB=-1" \
+                     "SDPA_SPCHOL_DIGEST_DUMP=/no/such/dir/dump.bin" \
+                     "SDPA_SPCHOL_MUTATE=1" "SDPA_SPCHOL_MUTATE=2" "SDPA_SPCHOL_MUTATE=yes"; do
             if env $bad ./sdpa_dd -ds example1.dat-s -o /tmp/o -p param.sdpa >/tmp/l 2>&1; then
               echo "FAIL: $bad was ACCEPTED -- a typo must not select a default silently" >&2
               exit 1
             fi
-            grep -qE "must be|is set but empty" /tmp/l \
+            grep -qE "must be|is set but empty|cannot open|was not built with" /tmp/l \
               || { echo "FAIL: $bad exited nonzero but printed no diagnostic" >&2; cat /tmp/l; exit 1; }
             echo "  refused: $bad"
           done
@@ -886,17 +888,94 @@ jobs:
           [ "${thr:-0}" -ge 1 ] \
             || { echo "FAIL: no pivot ran threaded -- this job would be vacuous" >&2; cat /tmp/log4; exit 1; }
           echo "  non-vacuity OK: $thr pivots threaded"
-          # Bit-identity: the factor must not depend on the team size.
+          # ---------------------------------------------------------------- bit-identity
+          # THREE comparisons, weakest to strongest. The first version of this job had only the
+          # weakest one and called the result "bit-identical", which overstated what it tested:
+          # a review pointed out that one objValPrimal line is a summary field, not the factor,
+          # and a 1-ulp change deep in a mantissa does not reach it. Demonstrated, not assumed --
+          # the mutation step below perturbs the factor by one ulp and objValPrimal does not move.
+          rm -f /tmp/objs /tmp/dig.*
           for th in 1 2 4; do
-            SDPA_BMAT_MODE=sparse SDPA_SPCHOL_MODE=force OMP_NUM_THREADS=$th \
-              ./sdpa_dd -ds spchol_fix.dat-s -o /tmp/bi.$th -p param.sdpa >/dev/null 2>&1 || true
-            grep -a -m1 objValPrimal /tmp/bi.$th >> /tmp/objs || true
+            SDPA_BMAT_MODE=sparse SDPA_SPCHOL_MODE=force SDPA_SPCHOL_DIGEST_DUMP=/tmp/dig.$th \
+              OMP_NUM_THREADS=$th \
+              ./sdpa_dd -ds spchol_fix.dat-s -o /tmp/bi.$th -p param.sdpa >/dev/null 2>&1
+            rc=$?
+            # The exit status is part of the result. The previous version discarded it with
+            # `|| true`, so a run that died could still contribute a matching line.
+            [ "$rc" = 0 ] || { echo "FAIL: solver exited $rc at $th threads" >&2; exit 1; }
+            [ -s /tmp/bi.$th ]  || { echo "FAIL: empty solver output at $th threads" >&2; exit 1; }
+            [ -s /tmp/dig.$th ] || { echo "FAIL: empty factor dump at $th threads" >&2; exit 1; }
+            grep -a -m1 objValPrimal /tmp/bi.$th >> /tmp/objs
           done
-          n=$(sort -u /tmp/objs | wc -l)
-          cat /tmp/objs
-          [ "$n" = 1 ] \
-            || { echo "FAIL: $n distinct objectives across 1/2/4 threads -- threading is not bit-identical" >&2; exit 1; }
-          echo "  bit-identical across 1/2/4 threads"
+          # (a) summary field. Weakest, kept because it is what a user sees.
+          #     Count the LINES first: three identical lines and one single line both give
+          #     "1 distinct", so without this the test passes when two arms produced nothing.
+          [ "$(wc -l < /tmp/objs)" = 3 ] \
+            || { echo "FAIL: collected $(wc -l < /tmp/objs) objective lines, expected 3" >&2; exit 1; }
+          [ "$(sort -u /tmp/objs | wc -l)" = 1 ] \
+            || { echo "FAIL: objectives differ across 1/2/4 threads" >&2; cat /tmp/objs; exit 1; }
+          echo "  (a) objValPrimal identical across 1/2/4 threads"
+          # (b) the COMPLETE printed result, not one line of it. Timings and the output path are
+          #     the only fields legitimately allowed to vary between two runs.
+          norm () { grep -av -E "time *=|^out +is|^data +is" "$1"; }
+          for th in 2 4; do
+            diff <(norm /tmp/bi.1) <(norm /tmp/bi.$th) > /tmp/d.$th \
+              || { echo "FAIL: full output differs between 1 and $th threads" >&2
+                   head -40 /tmp/d.$th >&2; exit 1; }
+          done
+          echo "  (b) complete printed output identical across 1/2/4 threads"
+          # (c) THE FACTOR ITSELF, byte for byte -- the claim the threading actually makes.
+          #     A canonical length-framed stream over every live element's row, column and both
+          #     IEEE limbs. This is a cmp(1), not a hash comparison.
+          for th in 2 4; do
+            cmp /tmp/dig.1 /tmp/dig.$th \
+              || { echo "FAIL: FACTOR differs between 1 and $th threads" >&2; exit 1; }
+          done
+          echo "  (c) factor stream byte-identical across 1/2/4 threads ($(wc -c < /tmp/dig.1) bytes)"
+      - name: the oracle's negative control -- prove it can reject
+        run: |
+          set -e
+          # Everything above is worthless if the digest cannot tell two factors apart. Rebuild
+          # with the test hook, perturb the finished factor by ONE ULP of the low limb, and
+          # require (i) the factor stream to change and (ii) objValPrimal NOT to -- which is the
+          # evidence that comparison (a) alone was never sufficient.
+          make clean >/dev/null 2>&1 || true
+          ./configure --enable-openmp=yes CXXFLAGS="-O2 -DSDPA_SPCHOL_TEST_HOOKS" >/dev/null
+          make -j"$(nproc)" >/dev/null
+          python3 tests/gen_spchol_fixture.py > spchol_fix.dat-s
+          base () { # base <outfile> <dumpfile> [extra env]
+            local o=$1 d=$2; shift 2
+            rm -f "$d"
+            env "$@" SDPA_BMAT_MODE=sparse SDPA_SPCHOL_MODE=force SDPA_SPCHOL_DIGEST_DUMP="$d" \
+              OMP_NUM_THREADS=4 ./sdpa_dd -ds spchol_fix.dat-s -o "$o" -p param.sdpa >/dev/null 2>&1
+          }
+          base /tmp/clean /tmp/cleand
+          base /tmp/mutd  /tmp/mutdd SDPA_SPCHOL_MUTATE=1
+          if cmp -s /tmp/cleand /tmp/mutdd; then
+            echo "FAIL: a one-ulp mutation did not change the factor stream." >&2
+            echo "      The oracle is BLIND, so every comparison above proves nothing." >&2
+            exit 1
+          fi
+          echo "  negative control OK: the factor stream detects a one-ulp change"
+          c=$(grep -a -m1 objValPrimal /tmp/clean | sed 's/.*= *//')
+          m=$(grep -a -m1 objValPrimal /tmp/mutd  | sed 's/.*= *//')
+          if [ "$c" = "$m" ]; then
+            echo "  and objValPrimal did NOT move ($c) -- which is exactly why (a) alone"
+            echo "  is not a test of factor identity, and why (b) and (c) exist."
+          else
+            echo "  note: objValPrimal moved ($c -> $m) on this fixture." >&2
+          fi
+          # And the hook must not exist in a normal build: a test-only mutation reachable from a
+          # release binary is a defect, not a feature.
+          make clean >/dev/null 2>&1 || true
+          ./configure --enable-openmp=yes >/dev/null
+          make -j"$(nproc)" >/dev/null
+          if SDPA_SPCHOL_MUTATE=1 ./sdpa_dd -ds example1.dat-s -o /tmp/x -p param.sdpa >/tmp/nx 2>&1; then
+            echo "FAIL: SDPA_SPCHOL_MUTATE was ACCEPTED by a build without the hook" >&2; exit 1
+          fi
+          grep -q "was not built with" /tmp/nx \
+            || { echo "FAIL: refused, but with the wrong diagnostic" >&2; cat /tmp/nx; exit 1; }
+          echo "  release build refuses the mutation hook"
       - name: auto must be unchanged by the mode switch
         run: |
           set -e
