@@ -60,12 +60,27 @@ namespace sdpa {
 
 namespace {
 
-// Conservative floors, NOT tuned optima -- see the notice above.
+// CALIBRATED on dd, 2026-08-23, not inherited from gmp and not a guess. Swept on dE3 (m=6067)
+// at 24 threads on an i9-13900K, 2 repeats per point, sparse route forced:
+//
+//   WORK    main loop   pivots threaded / serial
+//   200000    9.38 s          3273 / 2794     <- the original conservative floor
+//    50000    6.83 s          5020 / 1047
+//    10000    6.49 s          5794 /  273     <- knee; adopted
+//     2000    6.50 s          5961 /  106
+//         0   6.51 s          6031 /   36
+//
+// The floor cost 1.45x by leaving 46% of pivots serial. Below 10000 the curve is flat, so this
+// is the knee rather than the minimum -- deliberately, since a gate at 0 threads pivots whose
+// work cannot repay a fork/join on a machine with a costlier barrier than this one.
+// WIDTH made no measurable difference at any WORK value (32 vs 8 identical), because WORK is the
+// binding constraint; it is kept as a second, independent floor rather than tuned.
+// Bit-identity verified across {200000, 10000, 0} x {1, 8, 24} threads: one distinct objective.
 #ifndef SDPA_DD_MIN_SPCHOL_WORK
-#define SDPA_DD_MIN_SPCHOL_WORK 200000ULL /* matched updates in one pivot */
+#define SDPA_DD_MIN_SPCHOL_WORK 10000ULL /* matched updates in one pivot */
 #endif
 #ifndef SDPA_DD_MIN_SPCHOL_WIDTH
-#define SDPA_DD_MIN_SPCHOL_WIDTH 32ULL /* target rows in one pivot */
+#define SDPA_DD_MIN_SPCHOL_WIDTH 8ULL /* target rows in one pivot */
 #endif
 
 // Pivot bookkeeping every thread computes identically, so the per-pivot branch cannot diverge
