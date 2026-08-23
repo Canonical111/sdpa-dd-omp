@@ -1,0 +1,134 @@
+# Installing sdpa-dd-omp
+
+Double-double (~32 significant digits) SDP solver. Linux and macOS, x86-64 and aarch64.
+
+## The short version
+
+```bash
+git clone https://github.com/Canonical111/sdpa-dd-omp.git
+cd sdpa-dd-omp
+bash .claude/skills/install-sdpa-omp/scripts/install.sh
+```
+
+That configures, builds, and **verifies** — it refuses to report success unless the bundled
+example solves to the expected objective and the OpenMP runtime is actually linked. Add
+`--serial` for a build with no OpenMP, or `--prefix=DIR` to install the binary.
+
+The script is the tested path: CI executes it on every push, in both modes, so a regression in it
+cannot ship quietly.
+
+## Doing it by hand
+
+```bash
+autoreconf -fi                      # upstream ships no configure
+./configure --enable-openmp=yes
+make -j"$(nproc)"                   # nproc is fine HERE (build parallelism, not solver threads)
+```
+
+**Always run `autoreconf -fi`**, even on a tree you have built before: a `configure` that survived
+a `git pull` can be stale relative to `configure.ac`, and reusing it silently configures
+yesterday's build.
+
+macOS needs a real GCC (Apple clang does not ship OpenMP):
+
+```bash
+brew install gcc
+./configure --enable-openmp=yes CXX=g++-14 CC=gcc-14   # match your brew version
+```
+
+`nproc` is safe for `make -j` but is **wrong for the solver** — see thread counts below.
+
+## Verifying the build
+
+The bundled example is a real check, not a smoke test — but it is tiny, so it cannot demonstrate
+threading:
+
+```bash
+./sdpa_dd -ds example1.dat-s -o out.result -p param.sdpa
+grep -E 'phase.value|objValPrimal' out.result
+```
+
+Expect `phase.value = pdOPT` and `objValPrimal = -4.1899999999999999e+01`. A different objective
+means something is wrong with the build; a different *iteration count* alone can be a compiler
+difference and is covered by the FP-contraction pin described in the README.
+
+### The property worth checking yourself
+
+This fork guarantees **bit-identical results at any thread count**. That is a real, testable
+claim:
+
+```bash
+for t in 1 4 8; do
+  OMP_NUM_THREADS=$t ./sdpa_dd -ds example1.dat-s -o t$t.result -p param.sdpa
+done
+diff <(grep -E 'objValPrimal|objValDual|phase.value|Iteration =' t1.result) \
+     <(grep -E 'objValPrimal|objValDual|phase.value|Iteration =' t8.result)
+```
+
+No output means the guarantee holds on your build. **Two settings deliberately change results and
+must not be varied during this check:** `SDPA_BMAT_MODE` (a different factorisation route) and
+`SDPA_SPCHOL_MODE=force` only insofar as it changes *which* pivots thread — the factor itself stays
+bit-identical, but leave both unset for a clean comparison.
+
+## Choosing a thread count
+
+Match `OMP_NUM_THREADS` to **physical cores**, never SMT threads. On Linux, pin:
+
+```bash
+OMP_PROC_BIND=true OMP_PLACES=cores taskset -c 0-23 \
+  OMP_NUM_THREADS=24 ./sdpa_dd -ds problem.dat-s -o out.result -p param.sdpa
+```
+
+**On a two-socket machine, measure before committing a long run.** Compare one socket's
+physical-core count against the whole machine's, pinning each run to exactly the cores it should
+use. Crossing the socket boundary helps on some machines and costs badly on others, and the answer
+is problem-dependent as well as machine-dependent.
+
+**On a hybrid CPU (P+E cores), benchmark rather than assume.** On this fork's own i9-13900K
+measurements all 24 physical cores beat the 8 P-cores alone on the five-problem total (58.8 s
+against 71.9 s) — but that is one machine and one problem set. See BENCHMARKS.md.
+
+**How much threading buys depends entirely on which route your problem takes.** Measured on pi
+(i9-13900K, 24 cores), dE3 (m=6067) and dE4 (m=7401):
+
+| | 1 thread | 24 threads | speedup |
+|---|---:|---:|---:|
+| dE4, sparse route (its default) | 46.6 s | **9.2 s** | **5.07×** |
+| dE3, dense route (its default) | 177.7 s | 22.6 s | 7.89× |
+| dE3, sparse route (`SDPA_BMAT_MODE=fill`) | — | **6.5 s** | 3.45× vs its own default |
+
+## Route selection, and the one knob worth knowing
+
+`SDPA_BMAT_MODE` selects how the Schur complement is factored: `auto` (default, unchanged),
+`fill`, `dense`, `sparse`. All are strictly parsed — a typo is refused rather than silently
+treated as `auto`.
+
+**`fill` is opt-in and can be a large win on large sparse problems.** On dE3 it takes the route
+`auto` declines: **6.5 s against 22.5 s, and 277 MB against 670 MB** — 3.4× faster on 2.4× less
+memory. It is not the default because the timings behind that decision cover two problem
+structures so far, not the seven the route census identifies. `SDPA_BMAT_LOG=1` prints which gate
+decided and why.
+
+`SDPA_BMAT_MAX_GB` caps the dense allocation and is enforced on every route to dense, so a problem
+that would silently need more memory than you have fails with a number instead.
+
+## Troubleshooting
+
+| symptom | cause | fix |
+|---|---|---|
+| `configure` reports no OpenMP support | Apple clang, or missing `-fopenmp` | install GCC and pass `CXX=g++-14 CC=gcc-14` |
+| built, but threading changes nothing | binary is serial, or threads unpinned | check `nm ./sdpa_dd \| grep GOMP`; pin with `taskset` + `OMP_PLACES=cores` |
+| more threads is *slower* | crossed a socket boundary, or oversubscribed SMT | use one socket's physical cores; never count SMT threads |
+| `SDPA_* must be ...` on startup | a typo in an env knob | the parser is strict by design; fix the value |
+| stale `configure` after `git pull` | autotools inputs newer than `configure` | `autoreconf -fi` (the installer does this unconditionally) |
+| iteration count differs across compilers | FP contraction | see the README's `-ffp-contract=off` note |
+
+Every environment variable, the exit-status contract, and what each knob can and cannot change
+are documented in [doc/technical.pdf](doc/technical.pdf) where present, and in the README.
+
+## A successful build leaves the tree almost clean
+
+`autoreconf -fi` refreshes the tracked `INSTALL` file, and on macOS the QD build replaces
+`config.guess`/`config.sub`. Those are the only expected working-tree changes. If restoring them,
+run `git diff` on each first and confirm the changes are only those refreshes — never
+blanket-restore.

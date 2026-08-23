@@ -6,7 +6,7 @@ SDPA group's own MPI solver, and "mp" already means multiprecision in this famil
 Fork of [nakatamaho/sdpa-dd](https://github.com/nakatamaho/sdpa-dd) at commit
 `6eaad8d9` (the original upstream README is preserved as
 [README-UPSTREAM.md](README-UPSTREAM.md)), carrying four patches that fix performance and
-reproducibility regressions. The issues were reported to the upstream maintainer and have not
+reproducibility regressions. **Build it:** [INSTALL.md](INSTALL.md). The issues were reported to the upstream maintainer and have not
 been adopted there; this fork exists so the fixes are usable.
 
 ## What changed (4 commits on top of upstream)
