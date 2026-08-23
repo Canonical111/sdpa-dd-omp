@@ -91,6 +91,59 @@ static bool bmat_test_f2_stale() {
    apart -- and this fork has now shipped two comparisons that could not fail. The low limb is
    chosen because it is invisible to every printed field and visible only to a comparison over
    the actual bits, which is the property being claimed. */
+// unset/auto -> gated; serial -> never thread; parallel -> thread regardless of the gate.
+enum BmatAsmMode { BMAT_ASM_AUTO, BMAT_ASM_SERIAL, BMAT_ASM_PARALLEL };
+static BmatAsmMode bmat_asm_mode() {
+    const char *e = getenv("SDPA_BMAT_ASM_MODE");
+    if (e == NULL || e[0] == '\0' || strcmp(e, "auto") == 0) {
+        return BMAT_ASM_AUTO;
+    }
+    if (strcmp(e, "serial") == 0) {
+        return BMAT_ASM_SERIAL;
+    }
+    if (strcmp(e, "parallel") == 0) {
+#ifndef _OPENMP
+        // Force or fail, never silently downgrade -- the lesson from SDPA_SPCHOL_MODE=force.
+        rError("SDPA_BMAT_ASM_MODE=parallel was requested but this binary was built without"
+               " OpenMP, so there is no parallel path to take");
+#endif
+        return BMAT_ASM_PARALLEL;
+    }
+    rError("SDPA_BMAT_ASM_MODE must be auto, serial or parallel (got \"" << e << "\")");
+    return BMAT_ASM_AUTO;
+}
+
+static bool bmat_asm_log() {
+    const char *e = getenv("SDPA_BMAT_ASM_LOG");
+    return e != NULL && e[0] != '\0' && strcmp(e, "0") != 0;
+}
+
+// Bounded unsigned knob, same strict contract as spchol_gate: empty refused, signs refused,
+// overflow refused. A silently-wrapped negative here would read as an enormous budget.
+static unsigned long long bmat_asm_u64(const char *name, unsigned long long dflt) {
+    const char *e = getenv(name);
+    if (e == NULL) {
+        return dflt;
+    }
+    if (e[0] == '\0') {
+        rError(name << " is set but empty; unset it to use the default");
+    }
+    const char *q = e;
+    while (*q == ' ' || *q == '\t') {
+        q++;
+    }
+    if (*q == '-' || *q == '+') {
+        rError(name << " must be a non-negative integer without a sign (got \"" << e << "\")");
+    }
+    errno = 0;
+    char *end = NULL;
+    const unsigned long long v = strtoull(q, &end, 10);
+    if (end == q || *end != '\0' || errno == ERANGE) {
+        rError(name << " must be a non-negative integer (got \"" << e << "\")");
+    }
+    return v;
+}
+
 static bool bmat_asm_mutate() {
     const char *e = getenv("SDPA_BMAT_ASM_MUTATE");
     if (e == NULL || e[0] == '\0' || strcmp(e, "0") == 0) {
@@ -132,6 +185,17 @@ static const char *bmat_asm_dump_path() {
     }
     return e;
 }
+
+/* Defaults. MIN_PAIRS is dd's own placeholder, not gmp's 4000: copying a gate is the single
+   most expensive mistake available here, and the Cholesky's inherited floor already cost 1.45x
+   once. It is set high enough that `auto` stays SERIAL on everything until the Phase-6 sweep
+   chooses a real value -- the phase preamble forbids moving a default before then. */
+#ifndef SDPA_BMAT_ASM_MIN_PAIRS_DEFAULT
+#define SDPA_BMAT_ASM_MIN_PAIRS_DEFAULT 18446744073709551615ULL /* effectively: never, yet */
+#endif
+#ifndef SDPA_BMAT_ASM_SCRATCH_MB_DEFAULT
+#define SDPA_BMAT_ASM_SCRATCH_MB_DEFAULT 4096ULL
+#endif
 
 static bool bmat_asm_profile_wanted() {
     const char *e = getenv("SDPA_BMAT_ASM_PROFILE");
@@ -1587,6 +1651,163 @@ void Newton::census_bMat_sparse_SDP(InputData &inputData, FILE *fp) {
     fflush(fp);
 }
 
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: threaded sparse bMat assembly.
+
+   PARALLEL OVER i-GROUPS, SERIAL OVER BLOCKS. The dependence structure that makes this safe:
+
+     - work1/work2 are per-GROUP scratch: written once when a new i begins, read by every pair
+       in that group. Concurrent groups would overwrite each other's, so each worker gets its
+       OWN pair of matrices. This is the one piece of gmp's scratch that dd genuinely needs --
+       what dd does NOT need is gmp's per-flop scalar temporary, because a dd_real allocates
+       nothing.
+     - hasF2Gcal is group state, so it is likewise per worker (and per group).
+     - the accumulation `sparse_bMat.sp_ele[SDP_location_sparse_bMat[l][iter]] += value` is
+       DISJOINT within a block: each pair (i,j) owns one entry, so distinct iters write distinct
+       slots. Across BLOCKS the same slot can be revisited -- which is why the block loop stays
+       serial rather than being the thing parallelised.
+
+   Bit-identity therefore holds by construction, as for the Cholesky: every element receives
+   exactly the same contributions computed by the same expressions, and no sum is reordered.
+   Asserted rather than assumed -- the assembly stream (emit_bMat_stream) compares the whole
+   matrix across thread counts, and its mutation control proves that comparison can fail.
+
+   Blocks are processed collectively: every thread walks the same block sequence so the
+   worksharing constructs are encountered by all of them in the same order. See git log. */
+bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &currentPt,
+                                              WorkVariables &work, ComputeTime &com,
+                                              int team, const char *why_serial_out) {
+    (void)why_serial_out;
+#ifndef _OPENMP
+    (void)inputData; (void)currentPt; (void)work; (void)com; (void)team;
+    return false;
+#else
+    // Group boundaries per block, computed once. A group is a maximal run of pairs sharing i.
+    // Building the index first keeps the parallel loop a flat, statically-sized iteration space,
+    // which is what lets `omp for` distribute it without any thread scanning for boundaries.
+    std::vector<std::vector<int> > gstart(SDP_nBlock);
+    long long total_groups = 0;
+    int max_dim = 0;
+    for (int l = 0; l < SDP_nBlock; ++l) {
+        int previous_i = -1;
+        for (int iter = 0; iter < SDP_number[l]; ++iter) {
+            const int i = SDP_constraint1[l][iter];
+            if (i != previous_i) {
+                gstart[l].push_back(iter);
+                previous_i = i;
+            }
+        }
+        gstart[l].push_back(SDP_number[l]); // sentinel: group g spans [gstart[g], gstart[g+1])
+        total_groups += (long long)gstart[l].size() - 1;
+        if (currentPt.xMat.SDP_block[l].nRow > max_dim) {
+            max_dim = currentPt.xMat.SDP_block[l].nRow;
+        }
+    }
+    if (total_groups <= 0) {
+        return false;
+    }
+
+    bool ok = true;
+    int actual_team = 1;
+    long long groups_done = 0;
+#pragma omp parallel num_threads(team) reduction(+ : groups_done)
+    {
+        // THE team, read inside the region that owns it: num_threads is a REQUEST, and acting
+        // on the requested size when the runtime gave fewer is the error that reopened gate 6
+        // in the Cholesky review.
+        const int here = omp_get_num_threads();
+#pragma omp master
+        actual_team = here;
+
+        // Private scratch, allocated ONCE per worker and sized to the largest block, so a
+        // worker never reallocates when the block loop advances. Thread 0 keeps using the
+        // shared work matrices: with a team of one this is then exactly the serial path.
+        const int me = omp_get_thread_num();
+        DenseMatrix priv1, priv2;
+        bool owns_priv = false;
+        if (me != 0 && max_dim > 0) {
+            priv1.initialize(max_dim, max_dim, DenseMatrix::DENSE);
+            priv2.initialize(max_dim, max_dim, DenseMatrix::DENSE);
+            owns_priv = true;
+        }
+
+        for (int l = 0; l < SDP_nBlock; ++l) {
+            DenseMatrix &xMat = currentPt.xMat.SDP_block[l];
+            DenseMatrix &invzMat = currentPt.invzMat.SDP_block[l];
+            DenseMatrix &shared1 = work.DLS1.SDP_block[l];
+            DenseMatrix &shared2 = work.DLS2.SDP_block[l];
+            const int ngroups = (int)gstart[l].size() - 1;
+            // The private matrices are sized to the largest block; a smaller block uses a
+            // leading submatrix of them, so the dimensions must be reset per block.
+            if (owns_priv) {
+                priv1.initialize(shared1.nRow, shared1.nCol, shared1.type);
+                priv2.initialize(shared2.nRow, shared2.nCol, shared2.type);
+            }
+            DenseMatrix &work1 = owns_priv ? priv1 : shared1;
+            DenseMatrix &work2 = owns_priv ? priv2 : shared2;
+
+#pragma omp for schedule(dynamic) nowait
+            for (int g = 0; g < ngroups; ++g) {
+                const int lo = gstart[l][g], hi = gstart[l][g + 1];
+                if (lo >= hi) {
+                    continue;
+                }
+                // Group state: each worker owns this group entirely, so the flag is local.
+                bool hasF2Gcal = false;
+                const int i = SDP_constraint1[l][lo];
+                const int ib = SDP_blockIndex1[l][lo];
+                SparseMatrix &Ai = inputData.A[i].SDP_sp_block[ib];
+                const FormulaType formula = useFormula[i * SDP_nBlock + l];
+
+                if (formula == F1) {
+                    Lal::let(work1, '=', Ai, '*', invzMat);
+                    Lal::let(work2, '=', xMat, '*', work1);
+                } else if (formula == F2) {
+                    Lal::let(work1, '=', Ai, '*', invzMat);
+                }
+
+                for (int iter = lo; iter < hi; ++iter) {
+                    const int j = SDP_constraint2[l][iter];
+                    const int jb = SDP_blockIndex2[l][iter];
+                    SparseMatrix &Aj = inputData.A[j].SDP_sp_block[jb];
+                    dd_real value;
+                    switch (formula) {
+                    case F1:
+                        calF1(value, work2, Aj);
+                        break;
+                    case F2:
+                        calF2(value, work1, work2, xMat, Aj, hasF2Gcal);
+                        break;
+                    case F3:
+                        calF3(value, work1, work2, xMat, invzMat, Ai, Aj);
+                        break;
+                    }
+                    // Disjoint within the block: distinct iter -> distinct location.
+                    sparse_bMat.sp_ele[SDP_location_sparse_bMat[l][iter]] += value;
+                }
+                groups_done++;
+            }
+            // The nowait above lets a worker start the next block's groups while others finish
+            // this one; correctness does not depend on a barrier here because different blocks
+            // touch different work matrices and the bMat writes are += into distinct slots
+            // within a block. A barrier IS required before leaving the region, and the region's
+            // implicit end barrier provides it.
+        }
+        if (owns_priv) {
+            priv1.terminate();
+            priv2.terminate();
+        }
+    }
+    if (bmat_asm_log()) {
+        rMessage("bmat asm: team=" << actual_team << " groups=" << total_groups
+                                   << " groups_executed=" << groups_done);
+    }
+    // A team of one means the region did the serial thing; report it so the caller's log does
+    // not claim concurrency that never happened.
+    ok = ok && (actual_team >= 1);
+    return ok;
+#endif
+}
+
 void Newton::compute_bMat_sparse_SDP(InputData &inputData, Solutions &currentPt, WorkVariables &work, ComputeTime &com) {
     TimeStart(B_NDIAG_START1);
     TimeStart(B_NDIAG_START2);
@@ -1602,6 +1823,71 @@ void Newton::compute_bMat_sparse_SDP(InputData &inputData, Solutions &currentPt,
             census_bMat_sparse_SDP(inputData, stdout);
         }
     }
+
+#ifdef _OPENMP
+    // ---- admission for the threaded assembly ------------------------------------------
+    // Gates mirror the Cholesky's: a mode, a work floor, a nesting guard, and -- unique to the
+    // assembly -- a MEMORY budget, because each extra worker needs two private dense matrices.
+    {
+        const BmatAsmMode amode = bmat_asm_mode();
+        long long pairs = 0;
+        int max_dim = 0;
+        for (int l = 0; l < SDP_nBlock; ++l) {
+            pairs += (long long)SDP_number[l];
+            if (currentPt.xMat.SDP_block[l].nRow > max_dim) {
+                max_dim = currentPt.xMat.SDP_block[l].nRow;
+            }
+        }
+        int team = (amode == BMAT_ASM_SERIAL) ? 1 : omp_get_max_threads();
+        const char *why = NULL;
+        if (amode == BMAT_ASM_SERIAL) {
+            why = "SDPA_BMAT_ASM_MODE=serial";
+        } else if (omp_get_level() != 0) {
+            why = "nested inside another OpenMP region";
+            team = 1;
+        } else {
+            const int tl = omp_get_thread_limit();
+            if (tl > 0 && tl < team) {
+                team = tl;
+            }
+            // MEMORY. Every worker beyond thread 0 needs work1 and work2 privately:
+            // 2 * max_dim^2 * sizeof(dd_real) bytes each. Computed in 64-bit and compared
+            // before any narrowing, so a large but valid budget cannot wrap.
+            const unsigned long long budget_mb =
+                bmat_asm_u64("SDPA_BMAT_ASM_SCRATCH_MB", SDPA_BMAT_ASM_SCRATCH_MB_DEFAULT);
+            const long long elems = sdpaProduct(max_dim, max_dim);
+            if (elems > 0 && budget_mb > 0) {
+                const unsigned long long per_worker =
+                    2ULL * (unsigned long long)elems * (unsigned long long)sizeof(dd_real);
+                const unsigned long long budget = budget_mb * 1048576ULL;
+                unsigned long long affordable = 1ULL + budget / (per_worker ? per_worker : 1ULL);
+                if (affordable > (unsigned long long)INT_MAX) {
+                    affordable = (unsigned long long)INT_MAX;
+                }
+                if ((int)affordable < team) {
+                    team = (int)affordable;
+                    if (team < 2) {
+                        why = "SDPA_BMAT_ASM_SCRATCH_MB budget admits only one worker";
+                    }
+                }
+            }
+            const unsigned long long min_pairs =
+                bmat_asm_u64("SDPA_BMAT_ASM_MIN_PAIRS", SDPA_BMAT_ASM_MIN_PAIRS_DEFAULT);
+            if (amode != BMAT_ASM_PARALLEL && (unsigned long long)pairs < min_pairs) {
+                why = "below SDPA_BMAT_ASM_MIN_PAIRS";
+                team = 1;
+            }
+        }
+        if (team >= 2) {
+            if (compute_bMat_sparse_SDP_parallel(inputData, currentPt, work, com, team, why)) {
+                TimeEnd(B_NDIAG_END1);
+                return;
+            }
+        } else if (bmat_asm_log()) {
+            rMessage("bmat asm: serial (" << (why ? why : "team would be 1") << ")");
+        }
+    }
+#endif
 
     for (int l = 0; l < SDP_nBlock; ++l) {
         DenseMatrix &xMat = currentPt.xMat.SDP_block[l];
@@ -1785,6 +2071,9 @@ void Newton::Make_bMat(InputData &inputData, Solutions &currentPt, WorkVariables
             (void)bmat_asm_profile_wanted();
             (void)bmat_asm_digest_wanted();
             (void)bmat_asm_mutate();
+            (void)bmat_asm_mode();
+            (void)bmat_asm_u64("SDPA_BMAT_ASM_MIN_PAIRS", SDPA_BMAT_ASM_MIN_PAIRS_DEFAULT);
+            (void)bmat_asm_u64("SDPA_BMAT_ASM_SCRATCH_MB", SDPA_BMAT_ASM_SCRATCH_MB_DEFAULT);
             {
                 const char *dp = bmat_asm_dump_path();
                 if (dp != NULL) {

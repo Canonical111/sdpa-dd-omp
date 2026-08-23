@@ -144,6 +144,8 @@ class Newton {
     void census_bMat_sparse_SDP(InputData &inputData, FILE *fp);
     // The assembly's own canonical stream -- the oracle for the Phase-4 threading.
     void emit_bMat_stream(FILE *dump, bool want_fingerprint);
+    // Threaded sparse assembly: parallel over i-groups, serial over blocks.
+    bool compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &currentPt, WorkVariables &work, ComputeTime &com, int team, const char *why_serial_out);
 
     void compute_bMat_dense_SOCP(InputData &inputData, Solutions &currentPt, WorkVariables &work, ComputeTime &com);
 
