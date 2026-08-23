@@ -50,7 +50,28 @@ work/$(CONFIGURE_STAMP): work/$(PATCH_STAMP)
 # required to carry the patched CFLAGS, and spooles.a is required to be non-empty -- a
 # failed SPOOLES build leaves a short but non-zero archive behind, so `test -s` alone is
 # not enough and the exit status is checked first.
+# Three CC guards, each catching a DIFFERENT failure, ported from sdpa-gmp-omp 2026-08-23. dd had
+# only the post-build checks below, which fire after a wasted build; CI's build-guards job
+# demonstrated the gap. SPOOLES hardcodes its own CFLAGS via Make.inc, so an unusable CC produces
+# either a silent fallback or a wall of errors far from the cause.
+#   1. EMPTY CC   -- make would substitute its built-in default and build something nobody chose.
+#   2. c99        -- what Make.inc's `.POSIX:` selects when CC is not passed. It rejects the -f
+#                    flags every SPOOLES line carries. Deliberately a name test: it fires even
+#                    where /usr/bin/c99 happens to be a capable wrapper, because relying on that
+#                    is relying on a coincidence of the host.
+#   3. CAPABILITY -- compile a two-line probe with -funroll-all-loops and check the exit status.
+#                    Names cannot cover every incapable compiler; behaviour can.
 work/$(BUILD_STAMP): work/$(CONFIGURE_STAMP)
+	@test -n "$(CC)" || { echo "FATAL: CC is empty; SPOOLES would fall back to make's built-in." >&2; exit 1; }
+	@case "$(CC)" in *c99) echo "FATAL: CC=$(CC) -- c99 rejects the -f flags SPOOLES needs. This is what Make.inc's '.POSIX:' defaults to when CC is not passed; pass a real compiler." >&2; exit 1;; esac
+	@printf 'int main(void){return 0;}\n' > $(abs_builddir)/work/.ccprobe.c
+	@$(CC) -funroll-all-loops -c $(abs_builddir)/work/.ccprobe.c -o $(abs_builddir)/work/.ccprobe.o \
+	  > $(abs_builddir)/work/.ccprobe.log 2>&1 \
+	  || { echo "FATAL: CC=$(CC) rejects -funroll-all-loops, which every SPOOLES compile line carries" >&2; \
+	       echo "       (Make.inc: override CFLAGS += -O2 -funroll-all-loops ...). Pass a compiler that accepts it." >&2; \
+	       cat $(abs_builddir)/work/.ccprobe.log >&2; \
+	       rm -f $(abs_builddir)/work/.ccprobe.*; exit 1; }
+	@rm -f $(abs_builddir)/work/.ccprobe.c $(abs_builddir)/work/.ccprobe.o $(abs_builddir)/work/.ccprobe.log
 	cd $(abs_builddir)/work/internal/ ; ${MAKE} global -f makefile CC='$(CC)' \
 	  pthread_cflags='$(pthread_cflags)' \
 	  > $(abs_builddir)/work/spooles-build.log 2>&1 \
