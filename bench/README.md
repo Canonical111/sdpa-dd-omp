@@ -1,14 +1,24 @@
 # Benchmark evidence
 
-Every performance figure in [README.md](../README.md), [INSTALL.md](../INSTALL.md) and
-[BENCHMARKS.md](../BENCHMARKS.md) is derived from the rows in
-[dd-port3-2026-08-24/](dd-port3-2026-08-24/). Each `.tsv` has a `.tsv.meta` beside it recording
-host, build commit and binary hash, compiler, parameter and input hashes, affinity, route and
-overlap policy, iteration budget, and repeat count.
+The **current headline figures** in [README.md](../README.md), [INSTALL.md](../INSTALL.md) and
+[BENCHMARKS.md](../BENCHMARKS.md) are derived from the rows in
+[dd-port3-2026-08-24/](dd-port3-2026-08-24/). Each `.tsv` has a `.tsv.meta` beside it describing
+**the provenance that was captured for that experiment, and the known limits of it**. The two
+paired campaigns — `dd_v3_scaling_1t_24t` and `dd_upstream_vs_v3` — carry the strongest record,
+including exact binary, compiler, parameter, input, affinity, route and repeat information. Some
+earlier diagnostic campaigns retain a narrower record; their metadata says what it has rather than
+claiming a full tuple. Provenance is not manufactured after the fact.
 
-**[validate.py](validate.py) recomputes the published figures from these rows** and fails if any
-one of them no longer follows. CI runs it on every push, so the tables and the evidence cannot
-drift apart silently.
+**[validate.py](validate.py) recomputes the listed current headline figures from these rows** and
+fails if any one of them no longer follows. CI runs it on every push, so those tables and the
+evidence cannot drift apart silently.
+
+Read its total honestly: it is the number of **all** checks — structure, parsing, blank fields,
+return codes, repeat coverage, determinism **and** numerical derivation — not a count of
+independently recomputed figures. The derivation block covers the current headline, the scaling
+table, every cell of the upstream table, all seven `fill` structures, and the memory claim. It does
+**not** regenerate the older per-machine historical tables, which are backed by other public TSVs
+outside this folder.
 
 ```bash
 python3 bench/validate.py
@@ -28,6 +38,7 @@ python3 bench/validate.py
 | `dd_de4_stream_census.tsv` | how often that race actually fired on dE4 — once in seventeen threaded runs |
 | `dd_gate_separation_{m1,pi}_4iter.tsv` | why the assembly gate was **not** retuned |
 | `dd_alloc_vs_barrier.tsv` | why the small-block loss is synchronisation and not allocation |
+| `dd_historical_baseline.tsv` | the pre-threading baseline the **7.13×** is measured against — so both sides of that ratio come from published rows |
 
 ## Reproducing a row
 
@@ -48,6 +59,16 @@ reproduced from this repository alone.** Their shapes are recorded — dE3 is m=
 both 17 blocks; the seven `fill` structures are m = 2439, 4489, 5278, 6067, 8359, 10614, 11227, all
 17 blocks — and every `.meta` carries the input's sha256, so a holder of the same file can confirm
 they are running what we ran.
+
+Three different things get conflated by the word "reproducible", so to be exact about what this
+archive gives you:
+
+- **auditable** — you can recompute the published summaries from the published rows. True for
+  everything here.
+- **identifiable** — if you hold the same input, its sha256 in the metadata confirms it is the one
+  we ran. True for the private-input campaigns.
+- **reproducible** — a fresh public clone can rerun the experiment. True only for the public-input
+  campaigns.
 
 Everything measured on **public** inputs — SDPLIB (`truss6`, `arch0`, `gpp100`, `control1`) and the
 generated fixtures — is fully reproducible here, and that includes the data race itself: `truss6`

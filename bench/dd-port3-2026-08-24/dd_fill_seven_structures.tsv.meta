@@ -42,8 +42,10 @@
 #  10614          38 |  150.473 s 2032 MB |  22.362 s  831 MB  |  6.73x |  2.45x
 #  11227          48 |  175.807 s 2358 MB |  47.944 s 1183 MB  |  3.67x |  1.99x
 #
-# Every one of the 167 census instances belongs to one of these seven shapes, so the coverage is
-# complete rather than a sample. The advantage is 2.6x-6.7x in time and 1.8x-2.5x in memory, and it
+# One representative from EACH of the seven structural classes was measured, and those seven classes
+# contain all 167 switch instances. That is complete coverage of the CLASSES -- seven timed inputs,
+# not 167. Equal dimensions and block structure constrain the work but do not prove identical
+# trajectories or timings for every member of a class. The advantage is 2.6x-6.7x in time and 1.8x-2.5x in memory, and it
 # does not shrink with problem size -- the largest structure still gains 3.7x on half the memory,
 # and at m=10614 the dense route needs 2.0 GB where fill needs 0.8 GB.
 #

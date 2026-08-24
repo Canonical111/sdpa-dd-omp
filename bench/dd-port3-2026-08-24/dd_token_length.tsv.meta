@@ -46,3 +46,7 @@
 #
 # Ruled out separately: -ffp-contract. Rebuilding upstream with ONLY -ffp-contract=off added still
 # fails at iteration 0 on the 600-digit input -- see ../dd-port2-2026-08-23/dd_max_scaling.tsv.meta.
+#
+# NOTE ON THE PATH ABOVE: it refers to the PRIVATE evidence repository, not to this public
+# archive. It is kept because it names the record that exists; it will not resolve in a public
+# clone. Public rows live under bench/dd-port3-2026-08-24/.

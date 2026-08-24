@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the published benchmark rows against the claims made from them.
+"""Check the published benchmark rows against the current headline claims made from them.
 
 The point is not that the numbers are *good* -- it is that a reader can confirm the tables in
 README/INSTALL/BENCHMARKS were actually derived from these rows, and that the rows are complete
@@ -76,7 +76,12 @@ for m in ("2439", "4489", "5278", "6067", "8359", "10614", "11227"):
 
 # ---- derivation: recompute what the documents publish -----------------------------------------
 print("\nderivation -- recomputing the published figures from these rows")
-HIST_DE4_24T = 46.329404   # historical unmodified fork, same protocol (dd-port-2026-08-23)
+# BOTH sides of the 7.13x come from published rows. This used to be a hard-coded literal sourced
+# from a TSV that exists only in the private evidence repository, so the validator derived one side
+# of a public claim and trusted the other -- caught in review.
+hist = rows("dd_historical_baseline.tsv")
+HIST_DE4_24T = med(hist, "mainloop_s", problem="dE4", threads="24", mode="-")
+ck(HIST_DE4_24T is not None, "historical dE4 baseline is present in the published archive")
 
 def near(a, b, tol=0.005):
     return a is not None and abs(a - b) / b <= tol
@@ -92,12 +97,24 @@ for p, m, th, want in [("dE4","auto","1",46.612), ("dE4","auto","24",6.399),
     got = med(s, "mainloop_s", problem=p, mode=m, threads=th)
     ck(near(got, want, 0.01), f"INSTALL scaling: {p}/{m} at {th}t = {want} s", f"got {got}")
 
-for b, p, th, want in [("upstream-6eaad8d","dE4","24",46.95), ("v7.1.3-omp.3","dE4","24",6.49),
-                       ("upstream-6eaad8d","dE3","24",60.92), ("v7.1.3-omp.3","dE3","24",22.81)]:
+for b, p, th, want in [("upstream-6eaad8d","dE4","1",49.24), ("upstream-6eaad8d","dE4","2",49.14),
+                       ("upstream-6eaad8d","dE4","4",47.80), ("upstream-6eaad8d","dE4","8",47.14),
+                       ("upstream-6eaad8d","dE4","16",46.90), ("upstream-6eaad8d","dE4","24",46.95),
+                       ("v7.1.3-omp.3","dE4","1",46.62), ("v7.1.3-omp.3","dE4","2",47.06),
+                       ("v7.1.3-omp.3","dE4","4",24.26), ("v7.1.3-omp.3","dE4","8",14.14),
+                       ("v7.1.3-omp.3","dE4","16",8.29), ("v7.1.3-omp.3","dE4","24",6.49),
+                       ("upstream-6eaad8d","dE3","1",434.85), ("upstream-6eaad8d","dE3","2",409.14),
+                       ("upstream-6eaad8d","dE3","4",211.32), ("upstream-6eaad8d","dE3","8",120.69),
+                       ("upstream-6eaad8d","dE3","16",71.08), ("upstream-6eaad8d","dE3","24",60.92),
+                       ("v7.1.3-omp.3","dE3","1",176.26), ("v7.1.3-omp.3","dE3","2",168.11),
+                       ("v7.1.3-omp.3","dE3","4",88.20), ("v7.1.3-omp.3","dE3","8",49.63),
+                       ("v7.1.3-omp.3","dE3","16",27.86), ("v7.1.3-omp.3","dE3","24",22.81)]:
     got = med(u, "mainloop_s", build=b, problem=p, threads=th)
     ck(near(got, want, 0.01), f"BENCHMARKS upstream: {b}/{p} at {th}t = {want} s", f"got {got}")
 
-for m, want_a, want_f in [("6067",22.974,4.498), ("10614",150.473,22.362), ("11227",175.807,47.944)]:
+for m, want_a, want_f in [("2439",1.924,0.606), ("4489",9.219,3.593), ("5278",14.502,3.877),
+                          ("6067",22.974,4.498), ("8359",66.203,15.131),
+                          ("10614",150.473,22.362), ("11227",175.807,47.944)]:
     for mode, want in (("auto",want_a), ("fill",want_f)):
         got = med(f7, "mainloop_s", m=m, route_mode=mode)
         ck(near(got, want, 0.01), f"INSTALL fill: m={m}/{mode} = {want} s", f"got {got}")

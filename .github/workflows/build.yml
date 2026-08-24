@@ -874,7 +874,8 @@ jobs:
           # ...and every VALID value must still be accepted, or the parser is just broken.
           for ok in "SDPA_SPCHOL_MODE=auto" "SDPA_SPCHOL_MODE=serial" "SDPA_SPCHOL_MODE=force" \
                     "SDPA_SPCHOL_MODE=legacy" \
-                    "SDPA_BMAT_MODE=auto" "SDPA_BMAT_MODE=fill" "SDPA_BMAT_MODE=dense" \
+                    "SDPA_BMAT_MODE=auto" "SDPA_BMAT_MODE=fill" "SDPA_BMAT_MODE=legacy" \
+                    "SDPA_BMAT_MODE=dense" \
                     "SDPA_BMAT_MAX_GB=100" "SDPA_SPCHOL_LOG=0" \
                     "SDPA_BMAT_ASM_CENSUS=0" "SDPA_BMAT_ASM_CENSUS=1" \
                     "SDPA_BMAT_TEST_BREAK_INVARIANT=0" "SDPA_BMAT_TEST_F2_STALE=0" \
@@ -1118,15 +1119,20 @@ jobs:
           # Expected routes are MEASURED and pinned, not derived: retuning a cutoff is allowed,
           # but it has to show up here as a failure rather than pass unnoticed.
           #
-          # case    auto    fill    unset   what it pins
-          # m100    DENSE   DENSE   DENSE   gate 1 is `m > 100`, so m=100 must NOT pass
-          # m101    SPARSE  SPARSE  SPARSE  and m=101 must
-          # nb5     DENSE   DENSE   DENSE   gate 1 is `nBlock > 5`, so 5 must NOT pass
-          # nb6     SPARSE  SPARSE  SPARSE  and 6 must
-          # wide    DENSE   SPARSE  DENSE   POLICY-DIVERGENT: the case that matters
-          # wider   DENSE   DENSE   DENSE   gate 2 trips at half the constraints plus one
-          # dense   DENSE   DENSE   DENSE
-          # band    DENSE   DENSE   DENSE   same aggregate, different cutoff per policy
+          # Since 2026-08-24 `auto` IS the fill policy and `legacy` is the old chooser, so the
+          # divergent pair is legacy-vs-auto, not auto-vs-fill. `fill` must now equal `auto`
+          # exactly -- it is a retained synonym, and a synonym that silently differs is worse
+          # than no synonym.
+          #
+          # case    auto    fill    unset   legacy  what it pins
+          # m100    DENSE   DENSE   DENSE   DENSE   gate 1 is `m > 100`, so m=100 must NOT pass
+          # m101    SPARSE  SPARSE  SPARSE  SPARSE  and m=101 must
+          # nb5     DENSE   DENSE   DENSE   DENSE   gate 1 is `nBlock > 5`, so 5 must NOT pass
+          # nb6     SPARSE  SPARSE  SPARSE  SPARSE  and 6 must
+          # wide    SPARSE  SPARSE  SPARSE  DENSE   POLICY-DIVERGENT: the case that matters
+          # wider   DENSE   DENSE   DENSE   DENSE   gate 2 trips at half the constraints plus one
+          # dense   DENSE   DENSE   DENSE   DENSE
+          # band    DENSE   DENSE   DENSE   DENSE
           route() { # $1 fixture $2 mode-or-empty
             if [ -z "$2" ]; then
               SDPA_BMAT_LOG=1 ./sdpa_dd -ds "$1" -o /tmp/rf.out -p param.sdpa 2>&1
@@ -1136,34 +1142,42 @@ jobs:
           }
           fails=0
           checked=0
-          for spec in m100:DENSE:DENSE:DENSE   m101:SPARSE:SPARSE:SPARSE \
-                      nb5:DENSE:DENSE:DENSE    nb6:SPARSE:SPARSE:SPARSE \
-                      wide:DENSE:SPARSE:DENSE  wider:DENSE:DENSE:DENSE \
-                      dense:DENSE:DENSE:DENSE  band:DENSE:DENSE:DENSE; do
+          for spec in m100:DENSE:DENSE:DENSE:DENSE     m101:SPARSE:SPARSE:SPARSE:SPARSE \
+                      nb5:DENSE:DENSE:DENSE:DENSE      nb6:SPARSE:SPARSE:SPARSE:SPARSE \
+                      wide:SPARSE:SPARSE:SPARSE:DENSE  wider:DENSE:DENSE:DENSE:DENSE \
+                      dense:DENSE:DENSE:DENSE:DENSE    band:DENSE:DENSE:DENSE:DENSE; do
             case=$(echo "$spec" | cut -d: -f1)
             exp_auto=$(echo "$spec" | cut -d: -f2)
             exp_fill=$(echo "$spec" | cut -d: -f3)
             exp_unset=$(echo "$spec" | cut -d: -f4)
+            exp_legacy=$(echo "$spec" | cut -d: -f5)
             python3 tests/gen_route_fixture.py "$case" > /tmp/rf.dat-s
             a=$(route /tmp/rf.dat-s auto); f=$(route /tmp/rf.dat-s fill); u=$(route /tmp/rf.dat-s "")
+            l=$(route /tmp/rf.dat-s legacy)
             checked=$((checked+1))
-            printf "  %-6s auto=%-6s fill=%-6s unset=%-6s\n" "$case" "$a" "$f" "$u"
-            [ -n "$a" ] && [ -n "$f" ] && [ -n "$u" ] \
+            printf "  %-6s auto=%-6s fill=%-6s unset=%-6s legacy=%-6s\n" "$case" "$a" "$f" "$u" "$l"
+            [ -n "$a" ] && [ -n "$f" ] && [ -n "$u" ] && [ -n "$l" ] \
               || { echo "FAIL: $case produced no route line at all" >&2; fails=$((fails+1)); continue; }
             [ "$a" = "$exp_auto" ]  || { echo "FAIL: $case auto=$a expected $exp_auto" >&2;  fails=$((fails+1)); }
             [ "$f" = "$exp_fill" ]  || { echo "FAIL: $case fill=$f expected $exp_fill" >&2;  fails=$((fails+1)); }
             [ "$u" = "$exp_unset" ] || { echo "FAIL: $case unset=$u expected $exp_unset" >&2; fails=$((fails+1)); }
+            [ "$l" = "$exp_legacy" ] || { echo "FAIL: $case legacy=$l expected $exp_legacy" >&2; fails=$((fails+1)); }
             # unset must follow auto, ALWAYS.
             [ "$u" = "$a" ] || { echo "FAIL: $case unset route $u != auto route $a" >&2; fails=$((fails+1)); }
+            # and `fill` is a retained SYNONYM for auto -- one that silently differed would be
+            # worse than not having it.
+            [ "$f" = "$a" ] || { echo "FAIL: $case fill route $f != auto route $a; fill must be a synonym" >&2; fails=$((fails+1)); }
           done
           [ "$checked" -eq 8 ] || { echo "FAIL: only $checked of 8 cases ran" >&2; exit 1; }
-          # NON-VACUITY: at least one case must actually diverge between the policies, or the
+          # NON-VACUITY: at least one case must actually diverge between the two POLICIES, or the
           # unset==auto assertion above is satisfied by every route table and proves nothing.
+          # The divergent pair is legacy-vs-auto since the promotion; comparing auto with fill
+          # would now compare a policy with itself and always pass.
           python3 tests/gen_route_fixture.py wide > /tmp/rf.dat-s
-          da=$(route /tmp/rf.dat-s auto); df=$(route /tmp/rf.dat-s fill)
-          [ "$da" != "$df" ] \
-            || { echo "FAIL: 'wide' no longer diverges (auto=$da fill=$df); the unset check is now vacuous" >&2; exit 1; }
-          echo "  policy divergence present on 'wide': auto=$da fill=$df"
+          da=$(route /tmp/rf.dat-s auto); dl=$(route /tmp/rf.dat-s legacy)
+          [ "$da" != "$dl" ] \
+            || { echo "FAIL: 'wide' no longer diverges (auto=$da legacy=$dl); the unset check is now vacuous" >&2; exit 1; }
+          echo "  policy divergence present on 'wide': auto=$da legacy=$dl"
           [ "$fails" -eq 0 ] || { echo "$fails route assertion(s) failed" >&2; exit 1; }
       - name: cross-block assembly -- the race the block-diagonal fixture cannot catch
         run: |

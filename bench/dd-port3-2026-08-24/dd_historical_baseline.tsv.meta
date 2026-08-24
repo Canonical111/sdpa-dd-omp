@@ -1,0 +1,33 @@
+# THE HISTORICAL BASELINE the published 7.13x speedup is measured AGAINST.
+#
+# WHY THIS FILE IS HERE. bench/validate.py recomputes the current dE4 figure (6.495 s) from
+# dd_final_headline_postfix.tsv, but the OTHER side of the ratio -- the unmodified fork's time --
+# used to be a hard-coded literal in the validator, sourced from a TSV that exists only in the
+# private evidence repository. The validator was therefore deriving one side of a public claim and
+# trusting the other. Round-8 review caught it. These are the rows, so both sides now come from
+# published data.
+#
+# WHAT "before" MEANS: the fork at its pre-threading state -- the four original patches, without
+# the threaded sparse Schur Cholesky or the threaded assembly. It is the baseline every "Nx faster"
+# claim in README/INSTALL is measured against.
+#
+# HOST: pi -- i9-13900K, 24 physical cores, Ubuntu. PINNING: OMP_PROC_BIND=true, OMP_PLACES=cores,
+#       taskset -c 0-(threads-1). PROTOCOL: `main loop time` over a fixed 4-iteration budget
+#       (mode column "budget"), 3 repeats, medians. Columns binary_sha12 and param_sha12 identify
+#       the exact binary and parameter file per row.
+#
+# THE ROWS THE PUBLISHED FIGURES USE
+#   dE4 at 24 threads: 46.326207 / 46.345559 / 46.329404  -> median 46.329404
+#   dE4 at  1 thread : 46.597976 / 46.571964 / 46.587285  -> median 46.587285
+#
+# 46.329404 / 6.495325 = 7.1327  -- the published 7.13x, same protocol, same thread count.
+#
+# THE 1-THREAD ROW IS THE ONE THAT CAUSED AN ERROR, and it is kept here as the record of it: an
+# earlier README divided the CURRENT 24-thread median into the HISTORICAL 1-thread median
+# (46.587285 / 6.495325 = 7.1724) and published 7.17x. That mixes two builds AND two thread
+# counts. The two medians differ by only 0.6% -- the unmodified fork barely scales on dE4, because
+# its sparse path is entirely serial -- which is exactly why the mistake was easy to make and hard
+# to see.
+#
+# dE3 rows are included for the same protocol; the published dE3 comparisons are route-vs-route at
+# 24 threads rather than against this baseline.

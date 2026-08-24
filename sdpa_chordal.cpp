@@ -368,32 +368,74 @@ int Chordal::Spooles_MS(int m) {
    `fill` policy. Ported from sdpa-gmp-omp; see review/GATE3-DECISION-RULE-FINAL-REPORT.md and
    review/DD-PORT-PLAN-2026-08-23.md in the recipe repo.
 
-   `auto` IS THE DEFAULT AND ITS SEMANTICS ARE SOURCE-PRESERVED: every per-mode cutoff below is a
-   ternary whose auto arm is the released expression verbatim, so an unset SDPA_BMAT_MODE takes
-   exactly the decisions it took before this commit.
+   THE DEFAULT IS THE FILL-DERIVED POLICY (2026-08-24). Gate 2 keeps a frozen cutoff of 0.5*m
+   through a constant of its own; gate 3 is demoted from an independent 0.25 policy to the early
+   implication of gate 4's own threshold; gate 4 decides the rest. SDPA_BMAT_MODE=legacy restores
+   the released chooser exactly.
 
-   WHY `fill` IS OPT-IN RATHER THAN THE DEFAULT. Under `auto`, gate 3 rejects on aggregate density
-   > 0.25 and gate 4 on ordered fill > 0.40, so gate 3 is strictly the stricter test and problems
-   with aggregate in (0.25, 0.40] never reach gate 4. `fill` demotes gate 3 to gate 4's own
-   constant, which is sound because symbolic factorisation only ADDS entries -- aggregate > F
-   proves fill > F -- so the early exit cannot change gate 4's verdict, only skip work.
-   The route census in review/artifacts/gate3/ says what that costs and buys, and its ROUTE data
-   transfers across precisions because these gates read only structure:
-     SDPLIB     92 instances:   0 change route (84 decided at gate 1, 6 at gate 2)
-     bootstrap 221 instances: 167 change DENSE -> SPARSE, across 7 structures
-   Measured on dd (dE3, m=6067, 24 threads, calibrated spchol gates): dense 22.56 s / 671 MB
-   against sparse 6.54 s / 277 MB, i.e. 3.45x faster and 2.42x less memory -- but only because
-   the sparse Cholesky is now threaded. Promoting this to the default is a separate decision that
-   wants dd-side timings for the other six switch structures first. */
+   WHY GATE 3's 0.25 IS WRONG, AND WHY DEMOTING IT IS SOUND. Under the legacy rule gate 3 rejects
+   on aggregate density > 0.25 while gate 4 rejects on ordered fill > 0.40, so gate 3 is the
+   STRICTER test and a problem with aggregate in (0.25, 0.40] never reaches gate 4 at all -- the
+   cheap pre-screen overrules the real one. Demoting gate 3 to gate 4's own constant is sound
+   because symbolic factorisation only ADDS entries: aggregate > F proves fill > F, so the early
+   exit can only skip work, never change gate 4's verdict. F = 0.40 is therefore the LARGEST
+   sound cutoff for gate 3, and 0.25 was conservatism with nothing behind it.
+
+   ROUTE DATA TRANSFERS ACROSS PRECISIONS because these gates read only structure -- the same
+   census governs dd and gmp:
+     SDPLIB     92 instances:   0 change route (84 decided at gate 1, 6 at gate 2, and the one
+                                that reaches gate 3, truss5, has aggregate = fill = 1.0 and goes
+                                dense under BOTH rules)
+     bootstrap 221 instances: 167 change DENSE -> SPARSE, across 7 structures. Every one of the
+                                167 has aggregate in 0.257-0.362 and ordered fill in 0.259-0.367:
+                                above the legacy 0.25, and NOT ONE above 0.40. The real test says
+                                sparse on all of them and the pre-screen was overriding it.
+
+   MEASURED ON dd, all seven switch structures, 24 threads, medians of 3
+   (bench/dd-port3-2026-08-24/dd_fill_seven_structures.tsv):
+     m= 2439  1.92 s/116 MB -> 0.61 s/ 50 MB   3.17x, 2.30x less memory
+     m= 4489  9.22 s/392 MB -> 3.59 s/213 MB   2.57x, 1.84x
+     m= 5278 14.50 s/519 MB -> 3.88 s/234 MB   3.74x, 2.22x
+     m= 6067 22.97 s/671 MB -> 4.50 s/277 MB   5.11x, 2.42x
+     m= 8359 66.20 s/1.3 GB -> 15.13 s/587 MB  4.38x, 2.20x
+     m=10614  150.5 s/2.0 GB -> 22.36 s/831 MB 6.73x, 2.45x
+     m=11227  175.8 s/2.4 GB -> 47.94 s/1.2 GB 3.67x, 1.99x
+   Seven of seven, no reversal.
+
+   AND THE SIBLING FORK ALREADY DID THIS, on 2026-08-18 after five review rounds, with evidence dd
+   cannot generate for itself: sdpa-gmp-omp promoted the same policy on the SAME seven structures,
+   measured AT FULL CONVERGENCE (m=6067: dense 2708 s against sparse 310 s), on two architectures,
+   at 256 and 512 bits, at nine thread points, with no reversal -- and at T=1, where sparse still
+   won 2.60-3.06x, proving the 0.25 was already mis-routing in the SERIAL regime it was calibrated
+   for. Where the dense arm converged, phases and iteration counts were EQUAL per pair and the
+   solution vectors agreed to 6.3e-38. dd cannot reproduce that half: these instances do not
+   converge at double-double precision under any tolerance tested, so dd's own timings are
+   per-iteration only. See review/GATE3-DECISION-RULE-FINAL-REPORT.md in the recipe repo.
+
+   NOT "SPARSE ALWAYS WINS", and the counterexample is in our own corpus: SDPLIB truss5 has an
+   ordered fill of 1.0 -- a completely dense factor -- and dense IS faster there. Both rules route
+   it dense. That is why the rule tests fill rather than assuming an answer.
+
+   WHAT THE CHANGE COSTS. Selecting a different factorisation is RESULT-CHANGING in the last
+   digits: the two routes follow different iterate trajectories. SDPA_BMAT_MODE=legacy restores
+   the pre-promotion chooser exactly -- the released gate expressions, including gate 2 derived
+   from m*sqrt(aggregate_threshold) and gate 3 at aggregate_threshold. Anyone reproducing a
+   pre-promotion dd result should set it. `fill` is retained as an explicit synonym for the new
+   default so scripts written during the opt-in phase keep working. */
 
 namespace {
 
-enum BMatMode { BMAT_AUTO, BMAT_FILL, BMAT_DENSE, BMAT_SPARSE };
+/* NOTE THE MISSING BMAT_AUTO. `auto` is still the default mode NAME, but its policy is now
+   BMAT_FILL, so an enumerator by that name would be a trap: `mode == BMAT_AUTO` reads as "is this
+   the default?" and would be false for every default run. The name still exists and is still the
+   default; it simply is not its own policy any more. Same choice, and same reasoning, as the gmp
+   fork. */
+enum BMatMode { BMAT_DENSE, BMAT_SPARSE, BMAT_FILL, BMAT_LEGACY };
 
-// Gate 2's own constant. Under `auto` it stays coupled to aggregate_threshold via sqrt(), exactly
-// as upstream wrote it; under `fill` it is this number instead, which has the SAME value (0.5)
-// but is no longer moved by retuning gate 3. That coupling is why gate 3 could not be retuned
-// without silently changing gate 2.
+// Gate 2's own constant. Under `legacy` the cutoff stays coupled to aggregate_threshold via
+// sqrt(), exactly as upstream wrote it; under the default it is this number instead, which has
+// the SAME value (0.5) but is no longer moved by retuning gate 3. That coupling is why gate 3
+// could not be retuned without silently changing gate 2.
 const double BMAT_FILL_BLOCK_FRACTION = 0.5;
 
 // Cap on the DENSE bMat allocation, in GB. Absent means no cap requested; present-but-empty is
@@ -550,10 +592,9 @@ static bool bmat_test_break_invariant() {
 
 BMatMode bmat_mode() {
     const char *e = getenv("SDPA_BMAT_MODE");
-    if (e == NULL || e[0] == '\0' || strcmp(e, "auto") == 0) {
-        return BMAT_AUTO;
-    }
-    if (strcmp(e, "fill") == 0) {
+    // Unset, "auto" and "fill" all mean the current default policy, which is the fill-derived
+    // one. "fill" is kept as an explicit synonym so opt-in-era scripts keep working.
+    if (e == NULL || e[0] == '\0' || strcmp(e, "auto") == 0 || strcmp(e, "fill") == 0) {
         return BMAT_FILL;
     }
     if (strcmp(e, "dense") == 0) {
@@ -562,10 +603,16 @@ BMatMode bmat_mode() {
     if (strcmp(e, "sparse") == 0) {
         return BMAT_SPARSE;
     }
+    // The pre-promotion chooser, exactly.
+    if (strcmp(e, "legacy") == 0) {
+        return BMAT_LEGACY;
+    }
     // Strict: a typo must not silently select the default, which is the very route a caller
     // setting this variable is usually trying to select against.
-    rError("SDPA_BMAT_MODE must be auto, fill, dense or sparse (got \"" << e << "\")");
-    return BMAT_AUTO;
+    rError("SDPA_BMAT_MODE must be auto, fill, dense, sparse or legacy (got \"" << e
+           << "\"). auto is the current policy; legacy is the pre-2026-08-24 chooser;"
+           << " fill is an explicit synonym for auto.");
+    return BMAT_FILL;
 }
 
 } // namespace
@@ -578,11 +625,11 @@ void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut
     const bool break_inv = bmat_test_break_invariant();
     const bool want_log = bmat_log_wanted();
     // Gate 2's cutoff: auto's expression verbatim, or fill's own decoupled constant.
-    const double g2 = (mode == BMAT_FILL) ? (BMAT_FILL_BLOCK_FRACTION * m)
-                                          : (m * sqrt(aggregate_threshold));
-    // Gate 3's cutoff: auto's 0.25, or fill's demotion to gate 4's own F.
-    const double g3 = (mode == BMAT_FILL) ? (extend_threshold * m * (double)m)
-                                          : (aggregate_threshold * m * (double)m);
+    const double g2 = (mode == BMAT_LEGACY) ? (m * sqrt(aggregate_threshold))
+                                            : (BMAT_FILL_BLOCK_FRACTION * m);
+    // Gate 3's cutoff: the legacy 0.25, or the default's demotion to gate 4's own F.
+    const double g3 = (mode == BMAT_LEGACY) ? (aggregate_threshold * m * (double)m)
+                                            : (extend_threshold * m * (double)m);
 
     if (mode == BMAT_DENSE) {
         if (want_log)
@@ -642,7 +689,7 @@ void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut
     if (mode != BMAT_SPARSE && aggregate_nnz > g3) {
         if (want_log)
             rMessage("bmat: gate3 aggregate=" << aggregate_nnz << " cutoff=" << g3
-                                              << (mode == BMAT_FILL ? " [fill policy]" : "")
+                                              << (mode == BMAT_LEGACY ? " [legacy policy]" : "")
                                               << " -> DENSE");
         bmat_dense_cap_check(m, "gate 3");
         best = -1;

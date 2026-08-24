@@ -24,12 +24,21 @@ it.
 
 | variable | values | changes results? |
 |---|---|---|
-| `SDPA_BMAT_MODE` | `auto` (default) · `fill` · `dense` · `sparse` | **yes** — see below |
+| `SDPA_BMAT_MODE` | `auto` (default) · `fill` (synonym) · `legacy` · `dense` · `sparse` | **yes** — see below |
 | `SDPA_BMAT_MAX_GB` | positive number of GB | no — a safety cap; refuses to allocate beyond it |
 | `SDPA_BMAT_LOG` | `1` on, `0` off | no — but see the advisory below |
 
-`auto` is the released chooser, unchanged. `fill` uses the fill-derived rule, which routes some
-problems to the sparse factorisation that `auto` sends dense.
+`auto` is the current default policy, which since **2026-08-24** is the fill-derived rule; `fill`
+is retained as an explicit synonym so opt-in-era scripts keep working. **`legacy` restores the
+pre-2026-08-24 chooser exactly** — set it to reproduce an older result.
+
+The difference is one cutoff. Gate 3 is a cheap pre-screen on the aggregate sparsity pattern; gate
+4 is the real test, on the ordered fill. `legacy` screens at 0.25·m² while gate 4 rejects at
+0.40·m², so gate 3 was the stricter test and problems in between never reached gate 4. Demoting
+gate 3 to gate 4's own constant is sound because symbolic factorisation only adds entries — so
+aggregate > F proves fill > F, and the early exit can only skip work. No SDPLIB problem changes
+route; on a bootstrap census 167 of 221 instances change dense → sparse, and every one of them has
+ordered fill below 0.40. See INSTALL.md for the measurements.
 
 **`SDPA_BMAT_MODE` is result-changing by design.** Dense and sparse are different factorisation
 routes, so they follow different iterate trajectories: across a 48-cell harness 30 cells differ

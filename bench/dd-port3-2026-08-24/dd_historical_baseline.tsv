@@ -1,0 +1,10 @@
+build	problem	threads	mode	gate_work	param	repeat	mainloop_s	iters	phase	rss_kb	rc	route	binary_sha12	param_sha12	load1
+before	dE4	24	-	-	budget	1	46.326207	4	noINFO	390460	0	NA	d0b85adfce92	9197d394cb39	0.72
+before	dE4	24	-	-	budget	2	46.345559	4	noINFO	390680	0	NA	d0b85adfce92	9197d394cb39	1.66
+before	dE4	24	-	-	budget	3	46.329404	4	noINFO	391128	0	NA	d0b85adfce92	9197d394cb39	2.52
+before	dE4	1	-	-	budget	1	46.597976	4	noINFO	391184	0	NA	d0b85adfce92	9197d394cb39	5.68
+before	dE4	1	-	-	budget	2	46.571964	4	noINFO	391288	0	NA	d0b85adfce92	9197d394cb39	3.03
+before	dE4	1	-	-	budget	3	46.587285	4	noINFO	391224	0	NA	d0b85adfce92	9197d394cb39	2.01
+before	dE3	24	-	-	budget	1	22.268148	4	noINFO	686524	0	NA	d0b85adfce92	9197d394cb39	3.78
+before	dE3	24	-	-	budget	2	22.450486	4	noINFO	686800	0	NA	d0b85adfce92	9197d394cb39	6.01
+before	dE3	24	-	-	budget	3	22.752978	4	noINFO	686580	0	NA	d0b85adfce92	9197d394cb39	10.58

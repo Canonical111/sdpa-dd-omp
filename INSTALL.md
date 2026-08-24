@@ -148,17 +148,38 @@ is a different experiment, and nothing here rules it out.
 
 ## Route selection, and the one knob worth knowing
 
-`SDPA_BMAT_MODE` selects how the Schur complement is factored: `auto` (default, unchanged),
-`fill`, `dense`, `sparse`. All are strictly parsed — a typo is refused rather than silently
-treated as `auto`.
+`SDPA_BMAT_MODE` selects how the Schur complement is factored: `auto` (default), `fill` (an
+explicit synonym for `auto`), `legacy`, `dense`, `sparse`. All are strictly parsed — a typo is
+refused rather than silently treated as the default.
 
-**`fill` is opt-in and can be a large win on large sparse problems.** On dE3 it takes the route
-`auto` declines: **4.5 s against 22.6 s, and 277 MB against 671 MB** — about 5× faster on 2.4× less
-memory. `SDPA_BMAT_LOG=1` prints which gate decided and why.
+### The default changed on 2026-08-24
 
-That is not one lucky problem. A route census identified **seven distinct structures** on which the
-two policies disagree, covering all 167 affected instances, and `fill` has now been measured on
-**every one of them**:
+**The fill-derived policy is now the default.** `SDPA_BMAT_MODE=legacy` restores the previous
+chooser exactly, and anyone reproducing a pre-2026-08-24 dd result should set it.
+
+**What actually changed is one cutoff.** The chooser has four gates. Gate 3 is a cheap pre-screen on
+the *aggregate* sparsity pattern; gate 4 is the real test, on the *ordered fill* of the factor.
+Previously gate 3 rejected at 0.25·m² while gate 4 rejected at 0.40·m² — so gate 3 was the stricter
+test, and any problem with aggregate density in (0.25, 0.40] was sent dense **without gate 4 ever
+running**. The pre-screen overruled the real test.
+
+Demoting gate 3 to gate 4's own constant is sound rather than optimistic: symbolic factorisation
+only *adds* entries, so aggregate > F proves fill > F. The early exit can then only skip work, never
+change gate 4's verdict — which makes 0.40 the **largest sound cutoff** for gate 3, and 0.25
+conservatism with nothing behind it.
+
+**Who this affects.** Route decisions depend only on sparsity structure, so the census transfers
+across precisions. Of 92 SDPLIB problems, **none** change route: 84 are decided at gate 1, 6 at gate
+2, and the single one that reaches gate 3 (`truss5`) has aggregate = fill = 1.0 and goes dense under
+both rules. On a 221-instance bootstrap census, 167 change dense → sparse across seven structural
+classes — and every one of those 167 has aggregate in 0.257–0.362 with ordered fill in 0.259–0.367,
+i.e. above the old 0.25 and **not one above 0.40**. Gate 4 said sparse on all of them.
+
+On dE3 the new default takes the route the old one declined: **4.5 s against 22.6 s, and 277 MB
+against 671 MB** — about 5× faster on 2.4× less memory. `SDPA_BMAT_LOG=1` prints which gate decided
+and why.
+
+That is not one lucky problem. One representative of **each** of the seven classes was measured:
 
 | m | `auto` (dense) | `fill` (sparse) | faster | less memory |
 |---:|---:|---:|---:|---:|
@@ -170,14 +191,23 @@ two policies disagree, covering all 167 affected instances, and `fill` has now b
 | 10,614 | 150.47 s / 2,032 MB | 22.36 s / 831 MB | 6.73× | 2.45× |
 | 11,227 | 175.81 s / 2,358 MB | 47.94 s / 1,183 MB | 3.67× | 1.99× |
 
-**It remains opt-in anyway, and the reason is worth understanding before you set it.**
-`SDPA_BMAT_MODE` is *result-changing*: dense and sparse are different factorisation routes and
-follow different iterate trajectories. The figures above are per-iteration costs over a fixed
-four-iteration budget, so they cannot tell you whether the two routes need the same *number* of
-iterations to reach a tolerance — and these instances do not converge at double-double precision
-under the tolerances tested, so no time-to-solution comparison exists to quote. What is established
-is that on per-iteration cost and peak memory, `fill` dominates on every structure that
-distinguishes the policies.
+**What the change costs, stated plainly.** `SDPA_BMAT_MODE` is *result-changing*: dense and sparse
+are different factorisation routes and follow different iterate trajectories, so results can differ
+in the last digits. The table above is a **fixed four-iteration, per-iteration experiment; no
+time-to-solution comparison was performed** — seven timed inputs, one per class, not 167.
+
+The other half of the case comes from the sibling fork. `sdpa-gmp-omp` promoted the same policy on
+2026-08-18 after five review rounds, on the *same seven structures*, measured **at full
+convergence** (m=6067: dense 2708 s against sparse 310 s), on two architectures, at 256 and 512
+bits, at nine thread points, with no reversal — and at one thread, where sparse still won 2.60–3.06×,
+showing the 0.25 was already mis-routing in the serial regime it was calibrated for. Where the dense
+arm converged, **phases and iteration counts were equal per pair** and the solution vectors agreed
+to 6.3e-38. dd cannot reproduce that half: these instances do not converge at double-double
+precision under either tolerance tested.
+
+**And it is not "sparse always wins".** SDPLIB `truss5` has an ordered fill of 1.0 — a completely
+dense factor — and dense is genuinely faster there. Both rules route it dense. That is why the rule
+tests fill rather than assuming an answer.
 
 Raw rows: [bench/dd-port3-2026-08-24/dd_fill_seven_structures.tsv](bench/dd-port3-2026-08-24/dd_fill_seven_structures.tsv).
 
