@@ -99,13 +99,34 @@ matrices as NaN:
 | | iterations | phase | objValPrimal |
 |---|---:|---|---|
 | upstream, as given | **0** | `dFEAS` | `-0.0` |
-| upstream, same problem truncated to 30 digits | 43 | `pdOPT` | `-2.2168869950759854e-02` |
-| **this fork**, as given | **43** | `pdOPT` | `-2.2168869945991022e-02` |
+| upstream, same problem truncated to 30 digits | 43 | `pdOPT` | varies run to run — see below |
+| **this fork**, as given | **43** | `pdOPT` | `-2.2168869945991022e-02`, all 5 runs |
 
 Upstream reports `cholesky miss condition :: not positive definite` at iteration 0 — an
-infeasibility diagnosis for a problem that is perfectly feasible. Truncating the mantissas to 30
-significant digits, still far beyond double-double's ~32-digit resolution so the *values* are
-unchanged, makes upstream solve it correctly: **the cause is token length alone.**
+infeasibility diagnosis for a problem that is perfectly feasible. Shortening the mantissas, and
+nothing else, makes it solve correctly.
+
+**The truncation must be longer than the format, and the row above is not.** 30 significant digits
+is *inside* double-double's ~32, so it can move the value — an earlier version of this text said
+30 was "far beyond" 32, which is arithmetically false. Repeated at **45** digits, comfortably past
+dd's precision and far below QD's ~309-digit converter limit, on pi against upstream `6eaad8d`:
+
+Five runs per cell, because **threaded upstream is nondeterministic on this problem too** — so
+the load-bearing columns are the phase and the iteration count, not the objective:
+
+| input | longest token | upstream | this fork |
+|---|---:|---|---|
+| `_max.dat-s` | 600 | **dFEAS at iteration 0**, 5/5 | pdOPT in 43, `-2.2168869945991022e-02`, 5/5 |
+| truncated to 45 | 45 | **pdOPT in 43**, 5/5 — but **5 distinct objectives**, spanning `-2.21688699444e-02` to `-2.21688699351e-02` | pdOPT in 43, `-2.2168869944779922e-02`, 5/5 |
+| truncated to 30 | 30 | pdOPT in 43, 5/5 — again 5 distinct objectives | pdOPT in 43, `-2.2168869943678050e-02`, 5/5 |
+
+This fork's three answers agree to 10 significant digits (relative spread 1.0e-10), which is what
+a last-bit change in the parsed `dd_real` amplified over 43 iterations looks like. So the 45-digit
+input is the same problem to within one ulp of dd precision, and a one-ulp input change cannot
+turn a NaN into a correct solve: **token length is the cause.**
+
+Raw rows: `review/artifacts/dd-port3-2026-08-23/dd_token_length.tsv`, with the truncation script
+beside it.
 
 This is the defect fixed by the reader work already in this fork, and the measurement above is an
 independent confirmation of it against a fresh upstream build at the fork's own base commit.
@@ -510,11 +531,12 @@ end-to-end speedups rather than strictly same-trajectory comparisons. The optimi
 own trajectory is identical at every thread count on every machine here.
 
 > **`v7.1.3-omp.2` was not, and this is worth stating where the reproducibility claims are made.**
-> That release carried a data race in the threaded sparse assembly: on a problem routed sparse
-> whose blocks share Schur-complement entries — SDPLIB `truss6` at default settings — it returned
-> a different answer on nearly every run. The tables above are unaffected (their problems either
-> route dense, fall below the threading gate, or were re-measured with repetition), but the
-> *claim* was false for that release and is only true again from `v7.1.3-omp.3`. Note also what
+> That release carried a data race in the threaded sparse assembly: on a problem whose sparse
+> assembly is **threaded** and whose SDP blocks share Schur-complement entries — SDPLIB `truss6`
+> at default settings — it returned a different answer on nearly every run. The tables above are
+> unaffected (their problems either route dense, fall below the assembly's threading gate, or
+> were re-measured with repetition), but the *claim* was false for that release. It is true again
+> on `main` at `20fa6c1`; the `v7.1.3-omp.3` release is pending. Note also what
 > the claim's shape cost: stated as identity **across thread counts**, it directed every check at
 > comparisons between thread counts, and a race that moves both sides passes those. The
 > reproducibility evidence below now includes repetition at ONE thread count.

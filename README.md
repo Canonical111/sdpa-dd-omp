@@ -26,8 +26,11 @@ ordinary-magnitude number entered the SDP matrices as NaN and surfaced as a bogu
 `cholesky miss condition` at iteration 0 — the solver reporting an infeasible problem when the
 problem was fine. On a user's 600-digit input, upstream terminates after **0 iterations** with
 `objValPrimal = -0.0`; this fork reaches **pdOPT in 43 iterations**. Truncating that same input to
-30 significant digits — still far beyond double-double's ~32-digit resolution, so the *values* are
-unchanged — makes upstream solve it correctly, which isolates the cause to token length alone.
+**45 significant digits** — beyond double-double's ~32-digit resolution, and far below the
+converter's ~309-digit limit — makes upstream solve it correctly, which isolates the cause to
+token length. (Shortening the token is the only thing that changes: this fork's answers on the
+600-, 45- and 30-digit inputs agree to 10 significant digits, and a change that small cannot turn
+a NaN into a correct solve.)
 The reader now validates full decimal syntax, keeps the original conversion path for mantissas up
 to 308 digits (ordinary inputs stay bit-identical), normalises longer ones with the exponent
 preserved, and checks parser status *and* finiteness rather than letting NaN reach the solver.
@@ -51,10 +54,13 @@ take dE4 (m=7401) from 46.6 s to **6.5 s at default settings**, a **7.2×** whol
 across repeated runs at one thread count** — verified by comparing the structures themselves, not
 the printed solution. Every runtime knob is documented in [RUNTIME.md](RUNTIME.md).
 
-> **If you are running `v7.1.3-omp.2`, upgrade.** It contains a data race in the threaded
-> assembly: on a problem whose route is sparse *and* whose blocks share Schur-complement entries
-> — SDPLIB `truss6` among them, at default settings — it returns a different answer on nearly
-> every run. Fixed in `v7.1.3-omp.3`; the check that catches it is in
+> **Do not use `v7.1.3-omp.2`.** It contains a data race in the threaded assembly: on a problem
+> whose **sparse assembly is threaded** *and* whose SDP blocks share Schur-complement entries —
+> SDPLIB `truss6` among them, at default settings — it returns a different answer on nearly every
+> run. (A sparse-routed problem below the assembly's threading gate is unaffected.)
+>
+> **The fix is on `main` at `20fa6c1`; the `v7.1.3-omp.3` release is pending and not yet tagged.**
+> Until it is, build from `main`. The check that catches the defect is in
 > [INSTALL.md](INSTALL.md#the-property-worth-checking-yourself) and in CI.
 
 Each change carries its evidence in its commit message; [BENCHMARKS.md](BENCHMARKS.md) holds the

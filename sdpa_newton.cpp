@@ -1864,22 +1864,29 @@ void Newton::census_bMat_sparse_SDP(InputData &inputData, FILE *fp) {
 
 /* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: threaded sparse bMat assembly.
 
-   PARALLEL OVER i-GROUPS, SERIAL OVER BLOCKS. The dependence structure that makes this safe:
+   PARALLEL OVER i-GROUPS. WHETHER BLOCKS MAY OVERLAP IN TIME IS DECIDED PER PROBLEM, from the
+   finished map -- see SDP_blocks_disjoint. THE INVARIANT, in the order it must be read:
 
-     - work1/work2 are per-GROUP scratch: written once when a new i begins, read by every pair
-       in that group. Concurrent groups would overwrite each other's, so each worker gets its
-       OWN pair of matrices. This is the one piece of gmp's scratch that dd genuinely needs --
-       what dd does NOT need is gmp's per-flop scalar temporary, because a dd_real allocates
-       nothing.
-     - hasF2Gcal is group state, so it is likewise per worker (and per group).
-     - the accumulation `sparse_bMat.sp_ele[SDP_location_sparse_bMat[l][iter]] += value` is
-       DISJOINT within a block: each pair (i,j) owns one entry, so distinct iters write distinct
-       slots. This is CHECKED, not assumed -- make_aggrigateIndex_SDP proves the locations of a
-       block are pairwise distinct before any of this runs.
-     - Across BLOCKS the same slot IS revisited: a constraint pair (i,j) that is nonzero in two
-       blocks contributes to the same entry from both. So no two threads may be in different
-       blocks at the same time, which is why each block's worksharing loop ends in a BARRIER.
-       An earlier version wrote `nowait` here and was wrong: see the note at the loop.
+     1. WITHIN a block the destination slots are INJECTIVE: distinct iters of one block write
+        distinct sparse_bMat entries. This is CHECKED, not argued --  make_aggrigateIndex_SDP
+        walks the finished map and refuses a block that writes one entry twice.
+     2. Two different blocks may overlap in time ONLY when the finished map proves their
+        destination sets are DISJOINT. That is what SDP_blocks_disjoint records; it is computed
+        in the same pass as (1).
+     3. Otherwise each block's worksharing loop supplies the BARRIER, so all threads are in the
+        same block at once. dE3 and dE4 are examples of THIS arm, not the fast one: both report
+        blocks_disjoint=0. Take no example from the CI fixture here -- it is block-diagonal by
+        construction and takes the fast arm, which is exactly why it could not catch the race.
+     4. work1/work2 are per-GROUP scratch: written once when a new i begins, read by every pair
+        in that group. Concurrent groups would overwrite each other's, so each worker gets its
+        OWN pair of matrices. This is the one piece of gmp's scratch that dd genuinely needs --
+        what dd does NOT need is gmp's per-flop scalar temporary, because a dd_real allocates
+        nothing.
+     5. hasF2Gcal is group state, and lives in assemble_group, so it is per worker and per group
+        without anyone having to remember to make it so.
+
+   An earlier version wrote `nowait` unconditionally, on the strength of (1) alone. (1) is true
+   and does not imply (2). See the note at the loop.
 
    Bit-identity therefore holds by construction, as for the Cholesky: every element receives
    exactly the same contributions computed by the same expressions, and no sum is reordered.
@@ -1980,9 +1987,9 @@ bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &c
 #pragma omp master
         actual_team = here;
 
-        // Private scratch, allocated ONCE per worker and sized to the largest block, so a
-        // worker never reallocates when the block loop advances. Thread 0 keeps using the
-        // shared work matrices: with a team of one this is then exactly the serial path.
+        // Private scratch, one pair per worker, first sized to the largest block so the peak
+        // allocation happens here rather than mid-loop. Thread 0 keeps using the shared work
+        // matrices: with a team of one this is then exactly the serial path.
         const int me = omp_get_thread_num();
         DenseMatrix priv1, priv2;
         bool owns_priv = false;
@@ -1998,8 +2005,13 @@ bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &c
             DenseMatrix &shared1 = work.DLS1.SDP_block[l];
             DenseMatrix &shared2 = work.DLS2.SDP_block[l];
             const int ngroups = (int)gstart[l].size() - 1;
-            // The private matrices are sized to the largest block; a smaller block uses a
-            // leading submatrix of them, so the dimensions must be reset per block.
+            // Resized to THIS block. Note what initialize() actually does: it frees and
+            // reallocates whenever nRow*nCol differs from the previous dimensions -- it does
+            // NOT keep the largest buffer and use a leading submatrix, which is what an earlier
+            // version of this comment claimed. So a problem with many differently-shaped blocks
+            // pays an allocation per block per worker per iteration, and that cost has NOT been
+            // separated from the barrier's in the small-block losses (truss6). Measure the two
+            // apart before attributing that loss to barriers alone.
             if (owns_priv) {
                 priv1.initialize(shared1.nRow, shared1.nCol, shared1.type);
                 priv2.initialize(shared2.nRow, shared2.nCol, shared2.type);
@@ -2042,12 +2054,17 @@ bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &c
             // accumulates into the same sparse_bMat entry from both. Two threads then did
             // read-modify-write on the same dd_real.
             //
-            // It was invisible because of WHICH problems the oracle was run on. The CI
-            // fixture (tests/gen_spchol_fixture.py) is block-diagonal by construction -- each
-            // constraint touches exactly one block -- so no slot is ever shared and the race
-            // has nothing to land on. dE3 and dE4, the two problems the headline figures come
-            // from, behave the same way. A fixture that cannot expose a defect is not evidence
-            // that the defect is absent, which is the lesson this fork keeps relearning.
+            // It was invisible for two reasons, and the second is the uncomfortable one.
+            //
+            // The CI fixture (tests/gen_spchol_fixture.py) is block-diagonal by construction --
+            // each constraint touches exactly one block -- so no slot is ever shared and the
+            // race has nothing to land on. Every stream-identity assertion ran on it. A fixture
+            // that cannot expose a defect is not evidence that the defect is absent.
+            //
+            // dE3 and dE4 are NOT immune: both report blocks_disjoint=0. They escaped notice
+            // because at that size the race fires RARELY -- few blocks, long groups, a narrow
+            // window -- and one dE4 run in SEVENTEEN on pi produced a differing assembled matrix.
+            // A rare race compared once is a race not tested for.
             //
             // It is NOT confined to forced modes. SDPLIB truss6.dat-s routes sparse under the
             // default `auto` policy, and the released v7.1.3-omp.2 binary returned five
@@ -2063,10 +2080,15 @@ bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &c
             // a 24-block fixture, because it is paid once per SDP block per iteration. So it is
             // paid only where it is needed, and where that is gets COMPUTED: see the pass at the
             // end of make_aggrigateIndex_SDP, which walks the finished map and asks whether any
-            // sparse_bMat entry is written by two different blocks. Block-diagonal problems --
-            // the CI fixture, dE3, dE4 -- keep `nowait` and their full speed; truss6, 10_min and
-            // the cross-block fixture take the barrier and are correct. The distinction is the
-            // one the released code got wrong by assuming rather than checking.
+            // sparse_bMat entry is written by two different blocks.
+            //
+            // Measured: arch0 (2 blocks) and the block-diagonal CI fixture take `nowait`;
+            // truss6, 10_min, 12_min, the cross-block fixture, AND dE3 and dE4 take the barrier.
+            // The two headline problems being on the barrier arm is the point worth remembering
+            // -- it costs them +0.8% and +0.1%, and an earlier version of this comment asserted
+            // the opposite from their block structure without measuring it. The distinction is
+            // the one the released code got wrong by assuming rather than checking; do not
+            // reintroduce it by assuming which arm a problem takes.
         }
         if (owns_priv) {
             priv1.terminate();

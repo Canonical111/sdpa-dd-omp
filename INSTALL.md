@@ -113,12 +113,14 @@ against 71.9 s) — but that is one machine and one problem set. See BENCHMARKS.
 
 | | 1 thread | 24 threads | speedup |
 |---|---:|---:|---:|
-| dE4, sparse route (its default) | 46.6 s | **6.5 s** | **7.18×** |
-| dE3, dense route (its default) | 177.7 s | 22.7 s | 7.83× |
-| dE3, sparse route (`SDPA_BMAT_MODE=fill`) | — | **4.5 s** | 5.06× vs its own default |
+| dE4, sparse route (its default) | 46.6 s | **6.5 s** | **7.17×** |
+| dE3, dense route (its default) | 177.7 s | 22.6 s | 7.86× |
+| dE3, sparse route (`SDPA_BMAT_MODE=fill`) | — | **4.6 s** | 4.92× vs its own default |
 
 These are `main loop time` over a **fixed 4-iteration budget** — per-iteration solver cost, not
-time to solution. Neither problem converges at double-double precision under any tolerance dd can
+time to solution. Re-measured on `main` at `20fa6c1`, after the assembly race fix; the fix costs
+`dE4` +0.7% and `dE3`-via-`fill` +2.2% in time, and about **6% in peak memory** on both, which is
+the setup pass that decides whether two blocks may overlap. Neither problem converges at double-double precision under any tolerance dd can
 reach, so no solve time exists for them to quote.
 
 ## Route selection, and the one knob worth knowing
@@ -128,7 +130,7 @@ reach, so no solve time exists for them to quote.
 treated as `auto`.
 
 **`fill` is opt-in and can be a large win on large sparse problems.** On dE3 it takes the route
-`auto` declines: **4.5 s against 22.7 s, and 277 MB against 670 MB** — 5.1× faster on 2.4× less
+`auto` declines: **4.6 s against 22.6 s, and 294 MB against 671 MB** — 4.9× faster on 2.3× less
 memory. It is not the default because the timings behind that decision cover two problem
 structures so far, not the seven the route census identifies. `SDPA_BMAT_LOG=1` prints which gate
 decided and why.
