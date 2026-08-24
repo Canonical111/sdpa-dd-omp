@@ -293,6 +293,7 @@ Newton::Newton() {
     // Caution: if SDPA doesn't use sparse bMat,
     //          following variables are indefinite.
     this->SDP_nBlock = -1;
+    SDP_blocks_disjoint = true;
     SDP_number = NULL;
     SDP_location_sparse_bMat = NULL;
     SDP_constraint1 = NULL;
@@ -343,6 +344,7 @@ void Newton::initialize(int m, int SDP_nBlock, int *SDP_blockStruct, int SOCP_nB
     // Caution: if SDPA doesn't use sparse bMat,
     //          following variables are indefinite.
     this->SDP_nBlock = -1;
+    SDP_blocks_disjoint = true;
     SDP_number = NULL;
     SDP_location_sparse_bMat = NULL;
     SDP_constraint1 = NULL;
@@ -842,6 +844,52 @@ void Newton::make_aggrigateIndex_SDP(InputData &inputData) {
                    << SDP_number[l]);
         }
     }     // for k  kth block
+
+    // ---- the property the threaded assembly's `nowait` depends on, MEASURED ----
+    //
+    // Two questions in one pass over the finished map, both about sparse_bMat slots:
+    //
+    //   within a block, are the slots pairwise distinct? The assembly writes `+=` into
+    //     SDP_location_sparse_bMat[l][iter] from several threads at once, and it is only safe
+    //     because distinct iters of one block hit distinct slots. That follows from the
+    //     constraint indices being distinct, which the pre-pass checked -- but the derivation
+    //     is one step long and the cost of confirming it is one comparison per pair, so it is
+    //     confirmed rather than argued.
+    //
+    //   across blocks, is any slot written by more than one block? If not, two blocks may be in
+    //     flight at once and the worksharing loop can carry `nowait`; if so, they may not.
+    //     The released v7.1.3-omp.2 assumed the answer was always "no" and was wrong on any
+    //     problem with a constraint pair nonzero in two blocks -- SDPLIB truss6 among them.
+    //
+    // One int per stored bMat element, held only for this pass. Blocks are stamped from 1 so
+    // that 0 reads as "untouched" without a separate clear.
+    SDP_blocks_disjoint = true;
+    if (sparse_bMat.NonZeroCount > 0 && SDP_nBlock > 0) {
+        std::vector<int> stamp((size_t)sparse_bMat.NonZeroCount, 0);
+        // The whole map is walked even after sharing is found: stopping early would skip the
+        // within-block duplicate check on every later block, and that check is the one that
+        // guards a genuine memory error rather than a scheduling choice.
+        for (int l = 0; l < SDP_nBlock; l++) {
+            const int tag = l + 1;
+            for (int iter = 0; iter < SDP_number[l]; ++iter) {
+                const int t = SDP_location_sparse_bMat[l][iter];
+                const int was = stamp[(size_t)t];
+                if (was == tag) {
+                    rError("Newton::make_aggrigateIndex_SDP: block " << l
+                           << " writes sparse bMat element " << t
+                           << " twice; the threaded assembly requires one writer per element"
+                              " within a block");
+                }
+                if (was != 0) {
+                    // Shared with an earlier block. Nothing is wrong -- it is what an SDP with
+                    // a constraint pair nonzero in two blocks looks like -- but those blocks
+                    // may no longer overlap in time.
+                    SDP_blocks_disjoint = false;
+                }
+                stamp[(size_t)t] = tag;
+            }
+        }
+    }
 }
 
 // DISPOSITION, recorded rather than left ambiguous: this function is DEAD CODE. Its only call
@@ -1840,6 +1888,51 @@ void Newton::census_bMat_sparse_SDP(InputData &inputData, FILE *fp) {
 
    Blocks are processed collectively: every thread walks the same block sequence so the
    worksharing constructs are encountered by all of them in the same order. See git log. */
+/* One i-group's contribution to the Schur complement, in one place.
+
+   Extracted when the assembly grew two worksharing forms -- with and without `nowait` -- so
+   that the choice of form cannot change the arithmetic. Two copies of this body would be two
+   things to keep in step, and the stream oracle compares the assembled matrix against the
+   SERIAL routine, which is a third copy again. See git log. */
+void Newton::assemble_group(InputData &inputData, int l, int lo, int hi, DenseMatrix &xMat,
+                            DenseMatrix &invzMat, DenseMatrix &work1, DenseMatrix &work2) {
+    // Group state: one worker owns this group entirely, so the flag is local to the call. Its
+    // being function-local rather than hoisted is finding A's fix, kept structural.
+    bool hasF2Gcal = false;
+    const int i = SDP_constraint1[l][lo];
+    const int ib = SDP_blockIndex1[l][lo];
+    SparseMatrix &Ai = inputData.A[i].SDP_sp_block[ib];
+    const FormulaType formula = useFormula[i * SDP_nBlock + l];
+
+    if (formula == F1) {
+        Lal::let(work1, '=', Ai, '*', invzMat);
+        Lal::let(work2, '=', xMat, '*', work1);
+    } else if (formula == F2) {
+        Lal::let(work1, '=', Ai, '*', invzMat);
+    }
+
+    for (int iter = lo; iter < hi; ++iter) {
+        const int j = SDP_constraint2[l][iter];
+        const int jb = SDP_blockIndex2[l][iter];
+        SparseMatrix &Aj = inputData.A[j].SDP_sp_block[jb];
+        dd_real value;
+        switch (formula) {
+        case F1:
+            calF1(value, work2, Aj);
+            break;
+        case F2:
+            calF2(value, work1, work2, xMat, Aj, hasF2Gcal);
+            break;
+        case F3:
+            calF3(value, work1, work2, xMat, invzMat, Ai, Aj);
+            break;
+        }
+        // Disjoint within the block, and make_aggrigateIndex_SDP proves it rather than
+        // asserting it: distinct iter -> distinct location.
+        sparse_bMat.sp_ele[SDP_location_sparse_bMat[l][iter]] += value;
+    }
+}
+
 bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &currentPt,
                                               WorkVariables &work, ComputeTime &com,
                                               int team, const char *why_serial_out) {
@@ -1876,7 +1969,9 @@ bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &c
     bool ok = true;
     int actual_team = 1;
     long long groups_done = 0;
-#pragma omp parallel num_threads(team) reduction(+ : groups_done)
+    // Read once, outside the region, so every thread branches on the same value.
+    const bool blocks_disjoint = SDP_blocks_disjoint;
+#pragma omp parallel num_threads(team) reduction(+ : groups_done) firstprivate(blocks_disjoint)
     {
         // THE team, read inside the region that owns it: num_threads is a REQUEST, and acting
         // on the requested size when the runtime gave fewer is the error that reopened gate 6
@@ -1912,48 +2007,33 @@ bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &c
             DenseMatrix &work1 = owns_priv ? priv1 : shared1;
             DenseMatrix &work2 = owns_priv ? priv2 : shared2;
 
-#pragma omp for schedule(dynamic)
-            for (int g = 0; g < ngroups; ++g) {
-                const int lo = gstart[l][g], hi = gstart[l][g + 1];
-                if (lo >= hi) {
-                    continue;
-                }
-                // Group state: each worker owns this group entirely, so the flag is local.
-                bool hasF2Gcal = false;
-                const int i = SDP_constraint1[l][lo];
-                const int ib = SDP_blockIndex1[l][lo];
-                SparseMatrix &Ai = inputData.A[i].SDP_sp_block[ib];
-                const FormulaType formula = useFormula[i * SDP_nBlock + l];
-
-                if (formula == F1) {
-                    Lal::let(work1, '=', Ai, '*', invzMat);
-                    Lal::let(work2, '=', xMat, '*', work1);
-                } else if (formula == F2) {
-                    Lal::let(work1, '=', Ai, '*', invzMat);
-                }
-
-                for (int iter = lo; iter < hi; ++iter) {
-                    const int j = SDP_constraint2[l][iter];
-                    const int jb = SDP_blockIndex2[l][iter];
-                    SparseMatrix &Aj = inputData.A[j].SDP_sp_block[jb];
-                    dd_real value;
-                    switch (formula) {
-                    case F1:
-                        calF1(value, work2, Aj);
-                        break;
-                    case F2:
-                        calF2(value, work1, work2, xMat, Aj, hasF2Gcal);
-                        break;
-                    case F3:
-                        calF3(value, work1, work2, xMat, invzMat, Ai, Aj);
-                        break;
+            // ONE loop body, TWO worksharing forms. The branch is on a firstprivate constant,
+            // so it is collective: every thread takes the same arm and the constructs are
+            // encountered by all of them in the same order.
+            if (blocks_disjoint) {
+                // No sparse_bMat entry is written by more than one block, so letting a worker
+                // roll into block l+1 while another finishes block l cannot make two threads
+                // meet on one element. This is the fast path and it is taken because the map
+                // was CHECKED, not because the shape was assumed.
+#pragma omp for schedule(dynamic) nowait
+                for (int g = 0; g < ngroups; ++g) {
+                    const int lo = gstart[l][g], hi = gstart[l][g + 1];
+                    if (lo < hi) {
+                        assemble_group(inputData, l, lo, hi, xMat, invzMat, work1, work2);
+                        groups_done++;
                     }
-                    // Disjoint within the block: distinct iter -> distinct location.
-                    sparse_bMat.sp_ele[SDP_location_sparse_bMat[l][iter]] += value;
                 }
-                groups_done++;
+            } else {
+#pragma omp for schedule(dynamic)
+                for (int g = 0; g < ngroups; ++g) {
+                    const int lo = gstart[l][g], hi = gstart[l][g + 1];
+                    if (lo < hi) {
+                        assemble_group(inputData, l, lo, hi, xMat, invzMat, work1, work2);
+                        groups_done++;
+                    }
+                }
             }
-            // NO `nowait` ON THE LOOP ABOVE, and this is the reason.
+            // WHY THE SECOND ARM ABOVE HAS NO `nowait`.
             //
             // The first version of this function had one, justified by "the bMat writes are +=
             // into distinct slots within a block". That is true and irrelevant: `nowait` lets
@@ -1977,10 +2057,16 @@ bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &c
             // mechanism most plainly: 16,219 pairs are written into at most m(m+1)/2 = 2,775
             // slots, so cross-block sharing is forced by pigeonhole.
             //
-            // The implicit barrier at the end of this worksharing loop is the fix. It costs one
-            // barrier per SDP block, which is nothing next to a block's groups, and it restores
-            // the property the region is supposed to have: the block loop is serial in the sense
-            // that matters, namely that all threads are in the same block at the same time.
+            // The barrier restores the property the region is supposed to have: all threads are
+            // in the same block at the same time. It is not free -- on an M1 Max it costs 1.8x
+            // to 3.5x of the main loop on 10_min and 12_min, and 8.8x of the assembly kernel on
+            // a 24-block fixture, because it is paid once per SDP block per iteration. So it is
+            // paid only where it is needed, and where that is gets COMPUTED: see the pass at the
+            // end of make_aggrigateIndex_SDP, which walks the finished map and asks whether any
+            // sparse_bMat entry is written by two different blocks. Block-diagonal problems --
+            // the CI fixture, dE3, dE4 -- keep `nowait` and their full speed; truss6, 10_min and
+            // the cross-block fixture take the barrier and are correct. The distinction is the
+            // one the released code got wrong by assuming rather than checking.
         }
         if (owns_priv) {
             priv1.terminate();
@@ -1989,7 +2075,9 @@ bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &c
     }
     if (bmat_asm_log()) {
         rMessage("bmat asm: team=" << actual_team << " groups=" << total_groups
-                                   << " groups_executed=" << groups_done);
+                                   << " groups_executed=" << groups_done
+                                   << " blocks_disjoint=" << (SDP_blocks_disjoint ? 1 : 0)
+                                   << " overlap=" << (SDP_blocks_disjoint ? "nowait" : "barrier"));
     }
     // A team of one means the region did the serial thing; report it so the caller's log does
     // not claim concurrency that never happened.

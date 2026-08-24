@@ -1189,6 +1189,22 @@ jobs:
           cmp /tmp/xbp.bin /tmp/xbs.bin \
             || { echo "FAIL: threaded assembly differs from serial on the cross-block fixture" >&2; exit 1; }
           echo "  threaded assembly == serial, $sz bytes"
+          # 3. and the overlap POLICY must be the computed one, in both directions. Without
+          #    this the mechanism could silently degrade to "always barrier" (correct but slow)
+          #    or -- far worse -- to "always nowait", and every assertion above would still pass
+          #    on the fixtures that happen to be run.
+          xbp=$(SDPA_BMAT_ASM_LOG=1 ./sdpa_dd -ds xb.dat-s -o /tmp/xb3 -p param.sdpa 2>&1 \
+                  | grep -ao "overlap=[a-z]*" | head -1)
+          [ "$xbp" = "overlap=barrier" ] \
+            || { echo "FAIL: the cross-block fixture took $xbp; its blocks SHARE entries" >&2; exit 1; }
+          python3 tests/gen_spchol_fixture.py > spchol_fix.dat-s
+          sfp=$(SDPA_BMAT_MODE=sparse SDPA_BMAT_ASM_MODE=parallel SDPA_BMAT_ASM_LOG=1 \
+                  ./sdpa_dd -ds spchol_fix.dat-s -o /tmp/sf3 -p param.sdpa 2>&1 \
+                  | grep -ao "overlap=[a-z]*" | head -1)
+          [ "$sfp" = "overlap=nowait" ] \
+            || { echo "FAIL: the block-diagonal fixture took $sfp; its blocks are disjoint," >&2
+                 echo "      so the fast path has been lost." >&2; exit 1; }
+          echo "  overlap policy: cross-block fixture -> barrier, block-diagonal -> nowait"
       - name: the census, and the fixture that reaches the F2/dense-Aj path
         run: |
           set -e

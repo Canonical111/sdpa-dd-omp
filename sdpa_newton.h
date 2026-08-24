@@ -77,6 +77,10 @@ class Newton {
     //     A[k].block[j] <-> A[k].sp_block[blockIndex2[k][t]]
     //     B_{ij}        <-> sparse_bMat.sp_ele[location_sparse_bMat[k][t]]
     int SDP_nBlock;
+    // Do the SDP blocks write DISJOINT sets of sparse_bMat entries? Computed once from the
+    // finished map in make_aggrigateIndex_SDP, never assumed: the threaded assembly may only
+    // overlap two blocks in time when this is true, and the version that assumed it raced.
+    bool SDP_blocks_disjoint;
     int *SDP_number;
     int **SDP_constraint1;
     int **SDP_constraint2;
@@ -146,6 +150,10 @@ class Newton {
     void emit_bMat_stream(FILE *dump, bool want_fingerprint);
     // Threaded sparse assembly: parallel over i-groups, serial over blocks.
     bool compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &currentPt, WorkVariables &work, ComputeTime &com, int team, const char *why_serial_out);
+    // One i-group's contribution. Extracted so the two worksharing loops -- one with `nowait`,
+    // one without -- run identical code rather than two copies that can drift apart.
+    void assemble_group(InputData &inputData, int l, int lo, int hi, DenseMatrix &xMat,
+                        DenseMatrix &invzMat, DenseMatrix &work1, DenseMatrix &work2);
 
     void compute_bMat_dense_SOCP(InputData &inputData, Solutions &currentPt, WorkVariables &work, ComputeTime &com);
 
