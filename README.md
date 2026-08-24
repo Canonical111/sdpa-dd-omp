@@ -48,19 +48,24 @@ behind measured work gates, hardware FMA for the bundled QD on aarch64, and the 
 described below.
 
 Since then the two remaining serial regions on the large-sparse path have been threaded: the
-**sparse Schur-complement Cholesky** and the **sparse Schur-complement assembly**. Together they
-take dE4 (m=7401) from 46.6 s to **6.5 s at default settings**, a **7.2×** whole-solver speedup on
-24 cores, with the factor and the assembled matrix both **bit-identical at any thread count, and
-across repeated runs at one thread count** — verified by comparing the structures themselves, not
-the printed solution. Every runtime knob is documented in [RUNTIME.md](RUNTIME.md).
+**sparse Schur-complement Cholesky** and the **sparse Schur-complement assembly**. On the 24-core
+i9-13900K benchmark host, under a fixed four-iteration protocol, `v7.1.3-omp.3` runs dE4 (m=7401)
+in **6.495 s** against **46.329 s** for the historical unmodified-fork baseline measured the same
+way — a **7.13×** improvement. The factor and the assembled matrix are both **bit-identical at any
+thread count, and across repeated runs at one thread count**, verified by comparing the structures
+themselves rather than the printed solution. Every runtime knob is documented in
+[RUNTIME.md](RUNTIME.md).
+
+These are fixed-budget comparisons, not time-to-convergence results. Raw rows and full provenance:
+`review/artifacts/dd-port3-2026-08-23/dd_final_headline_postfix.tsv`.
 
 > **Do not use `v7.1.3-omp.2`.** It contains a data race in the threaded assembly: on a problem
 > whose **sparse assembly is threaded** *and* whose SDP blocks share Schur-complement entries —
 > SDPLIB `truss6` among them, at default settings — it returns a different answer on nearly every
 > run. (A sparse-routed problem below the assembly's threading gate is unaffected.)
 >
-> **The fix is on `main` at `20fa6c1`; the `v7.1.3-omp.3` release is pending and not yet tagged.**
-> Until it is, build from `main`. The check that catches the defect is in
+> **Fixed in [`v7.1.3-omp.3`](https://github.com/Canonical111/sdpa-dd-omp/releases/tag/v7.1.3-omp.3)**
+> (commit `e660d19`; archive sha256 `290a038e…`). The check that catches the defect is in
 > [INSTALL.md](INSTALL.md#the-property-worth-checking-yourself) and in CI.
 
 Each change carries its evidence in its commit message; [BENCHMARKS.md](BENCHMARKS.md) holds the
@@ -84,8 +89,17 @@ change.
 | **this fork** (2026-08-02 campaign) | **292.0 s** | **58.8 s** | **86.0 s** |
 
 **On the large sparse problems the gap is much wider, because upstream's threading does not
-reach them at all.** Measured 2026-08-23 against upstream `6eaad8d` — the commit this fork
-branched from and still its `master` — rebuilt from its own recipe, i9-13900K at 24 threads:
+reach them at all.**
+
+> **Historical: `v7.1.3-omp.2` campaign, superseded.** The fork columns below were measured before
+> the assembly race was fixed, and two of their cells (`dE4`, `dE3` via `fill`) ran the susceptible
+> sparse path. The race-fixed rerun moves those timings by under 3%, but these are **not**
+> `v7.1.3-omp.3` measurements. A full paired rerun against upstream on the fixed tree is open work;
+> the current release's own figures are in the headline above. Upstream's columns are unaffected —
+> they are a different build entirely.
+
+Measured 2026-08-23 against upstream `6eaad8d` — the commit this fork branched from and still its
+`master` — rebuilt from its own recipe, i9-13900K at 24 threads:
 
 | | upstream, 1 thread | upstream, 24 threads | **this fork, 24 threads** | fork vs upstream |
 |---|---:|---:|---:|---:|

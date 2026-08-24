@@ -34,6 +34,25 @@ nothing else.
 
 ### The large sparse problems — where upstream gains almost nothing
 
+> ### ⚠️ Historical: `v7.1.3-omp.2` campaign — superseded, not current
+>
+> **The fork rows in this section predate the assembly race fix.** They were measured on
+> `v7.1.3-omp.2`, and the `dE4` and `dE3`-via-`fill` cells ran the susceptible sparse path. The
+> race-fixed rerun of the headline cells moves those timings by under 3%, but these rows are
+> **not** `v7.1.3-omp.3` measurements and should not be quoted as such.
+>
+> **Current release figures** — same host, same four-iteration protocol, race-fixed tree
+> (`dd_final_headline_postfix.tsv`): `dE4` **6.495 s**, `dE3` default **22.595 s**, `dE3` via
+> `fill` **4.592 s / 294.5 MB**.
+>
+> A full paired rerun against upstream on the fixed tree is open work. Upstream's own columns are
+> unaffected — that is a different build entirely — and the *shape* of the result (upstream gains
+> ~5% from 24 cores on `dE4` because it threads no part of the sparse path) is a structural fact
+> about upstream, not a timing artefact.
+>
+> **Two repeats per cell**, which is below this project's later standard of three; a "median" of
+> two is not a middle observation. The replacement campaign will use at least three.
+
 `main loop time` over a fixed 4-iteration budget, medians of 2:
 
 | `dE4` (m=7401, routes **sparse**) | 1 | 2 | 4 | 8 | 16 | 24 | 1→24 |
@@ -536,7 +555,8 @@ own trajectory is identical at every thread count on every machine here.
 > at default settings — it returned a different answer on nearly every run. The tables above are
 > unaffected (their problems either route dense, fall below the assembly's threading gate, or
 > were re-measured with repetition), but the *claim* was false for that release. It is true again
-> on `main` at `20fa6c1`; the `v7.1.3-omp.3` release is pending. Note also what
+> in [`v7.1.3-omp.3`](https://github.com/Canonical111/sdpa-dd-omp/releases/tag/v7.1.3-omp.3)
+> (commit `e660d19`). Note also what
 > the claim's shape cost: stated as identity **across thread counts**, it directed every check at
 > comparisons between thread counts, and a race that moves both sides passes those. The
 > reproducibility evidence below now includes repetition at ONE thread count.

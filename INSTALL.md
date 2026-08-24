@@ -108,20 +108,38 @@ is problem-dependent as well as machine-dependent.
 measurements all 24 physical cores beat the 8 P-cores alone on the five-problem total (58.8 s
 against 71.9 s) — but that is one machine and one problem set. See BENCHMARKS.md.
 
-**How much threading buys depends entirely on which route your problem takes.** Measured on pi
-(i9-13900K, 24 cores), dE3 (m=6067) and dE4 (m=7401):
+**How much threading buys depends entirely on which route your problem takes.** Both columns below
+come from **one `v7.1.3-omp.3` binary in one session** on pi (i9-13900K, 24 physical cores),
+medians of three interleaved repeats — dE3 (m=6067) and dE4 (m=7401):
 
-| | 1 thread | 24 threads | speedup |
+| | 1 thread | 24 threads | 1→24 |
 |---|---:|---:|---:|
-| dE4, sparse route (its default) | 46.6 s | **6.5 s** | **7.17×** |
-| dE3, dense route (its default) | 177.7 s | 22.6 s | 7.86× |
-| dE3, sparse route (`SDPA_BMAT_MODE=fill`) | — | **4.6 s** | 4.92× vs its own default |
+| dE4, sparse route (its default) | 46.612 s | **6.399 s** | **7.28×** |
+| dE3, dense route (its default) | 176.357 s | 22.645 s | 7.79× |
+| dE3, sparse route (`SDPA_BMAT_MODE=fill`) | 31.370 s | **4.475 s** | 7.01× |
+
+`fill` is also about **5× faster than dE3's own default route** at 24 threads, on 2.3× less memory
+— see below.
+
+> **One caveat, because the data does not support more precision than this.** The `dE3`-with-`fill`
+> 24-thread cell is short (~4.5 s) and jittery: six runs across two campaigns span 4.34–4.90 s, a
+> **12%** spread, against ≤2.5% for every other cell and ≤0.1% for the 1-thread cells. So the
+> `fill`-versus-default advantage is *about 5×*, not 5.06× or 4.92×; both figures have been quoted
+> and neither deserves three significant figures. The dE4 and dE3-dense rows are steady and do
+> support theirs.
+
+Raw rows and full provenance — build hash, compiler, input and parameter hashes, affinity, route
+and overlap policy per cell: `review/artifacts/dd-port3-2026-08-23/dd_v3_scaling_1t_24t.tsv`.
 
 These are `main loop time` over a **fixed 4-iteration budget** — per-iteration solver cost, not
-time to solution. Re-measured on `main` at `20fa6c1`, after the assembly race fix; the fix costs
-`dE4` +0.7% and `dE3`-via-`fill` +2.2% in time, and about **6% in peak memory** on both, which is
-the setup pass that decides whether two blocks may overlap. Neither problem converges at double-double precision under any tolerance dd can
-reach, so no solve time exists for them to quote.
+time to solution. Measured on `v7.1.3-omp.3`, after the assembly race fix; the fix costs `dE4`
++0.7% and `dE3`-via-`fill` +2.2% in time, and about **6% in peak memory** on both, which is the
+setup pass that decides whether two blocks may overlap.
+
+Neither problem converged at double-double precision under **either of the two tolerance settings
+tested** — the shipped `epsilonStar=1e-30` and a relaxed `1e-20`. These runs therefore compare a
+fixed four-iteration computation budget rather than time to convergence; a looser parameter choice
+is a different experiment, and nothing here rules it out.
 
 ## Route selection, and the one knob worth knowing
 
@@ -130,7 +148,7 @@ reach, so no solve time exists for them to quote.
 treated as `auto`.
 
 **`fill` is opt-in and can be a large win on large sparse problems.** On dE3 it takes the route
-`auto` declines: **4.6 s against 22.6 s, and 294 MB against 671 MB** — 4.9× faster on 2.3× less
+`auto` declines: **4.5 s against 22.6 s, and 294 MB against 671 MB** — about 5× faster on 2.3× less
 memory. It is not the default because the timings behind that decision cover two problem
 structures so far, not the seven the route census identifies. `SDPA_BMAT_LOG=1` prints which gate
 decided and why.

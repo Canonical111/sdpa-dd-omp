@@ -1019,6 +1019,17 @@ jobs:
           grep -q "was not built with" /tmp/nx \
             || { echo "FAIL: refused, but with the wrong diagnostic" >&2; cat /tmp/nx; exit 1; }
           echo "  release build refuses the mutation hook"
+      - name: published claims match the archived evidence
+        run: |
+          set -e
+          # Four times in this campaign a claim was corrected in one copy and left standing in
+          # another. This is the regression guard for the specific claims known to have been
+          # wrong; it is narrow by design and is not a substitute for the .meta provenance.
+          bash tests/check_doc_claims.sh
+          # And the guard's OWN negative control: reintroduce each stale claim into a scratch
+          # copy and require its rule to fire. The first version of the tolerance rule was dead
+          # -- it allowed one asterisk where the document had two -- and this is what found it.
+          bash tests/check_doc_claims.sh --self-test
       - name: overflow guards -- the production helpers, at their boundaries
         run: |
           set -e
