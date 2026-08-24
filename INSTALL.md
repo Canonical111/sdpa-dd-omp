@@ -115,17 +115,18 @@ medians of three interleaved repeats — dE3 (m=6067) and dE4 (m=7401):
 | | 1 thread | 24 threads | 1→24 |
 |---|---:|---:|---:|
 | dE4, sparse route (its default) | 46.612 s | **6.399 s** | **7.28×** |
-| dE3, dense route (its default) | 176.357 s | 22.645 s | 7.79× |
-| dE3, sparse route (`SDPA_BMAT_MODE=fill`) | 31.370 s | **4.475 s** | 7.01× |
+| dE3, sparse route (**its default since 2026-08-24**) | 31.370 s | **4.475 s** | 7.01× |
+| dE3, dense route (`SDPA_BMAT_MODE=legacy`) | 176.357 s | 22.645 s | 7.79× |
 
-`fill` is also about **5× faster than dE3's own default route** at 24 threads, on 2.3× less memory
-— see below.
+**dE3's default route changed with the promotion described below.** It now takes the sparse route:
+about **4.5 s instead of 22.6 s** at 24 threads, on **277 MB instead of 671 MB** — roughly 5× faster
+on 2.4× less memory than the route it used to take. `SDPA_BMAT_MODE=legacy` restores the old one.
 
-> **One caveat, because the data does not support more precision than this.** The `dE3`-with-`fill`
+> **One caveat, because the data does not support more precision than this.** The `dE3` sparse
 > 24-thread cell is short (~4.5 s) and jittery: six runs across two campaigns span 4.34–4.90 s, a
 > **12%** spread, against ≤2.5% for every other cell and ≤0.1% for the 1-thread cells. So the
-> `fill`-versus-default advantage is *about 5×*, not 5.06× or 4.92×; both figures have been quoted
-> and neither deserves three significant figures. The dE4 and dE3-dense rows are steady and do
+> sparse-versus-dense advantage on dE3 is *about 5×*, not 5.06× or 4.92×; both figures have been
+> quoted and neither deserves three significant figures. The dE4 and dE3-dense rows are steady and do
 > support theirs.
 
 Raw rows and full provenance — build hash, compiler, input and parameter hashes, affinity, route

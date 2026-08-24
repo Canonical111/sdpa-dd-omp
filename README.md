@@ -140,12 +140,13 @@ the two builds interleaved cell by cell:
 | | upstream, 1 thread | upstream, 24 threads | **this fork, 24 threads** | fork vs upstream |
 |---|---:|---:|---:|---:|
 | `dE4` (m=7401, routes sparse) | 49.24 s | 46.95 s — **1.05×** | **6.49 s — 7.19×** | **7.24×** |
-| `dE3` (m=6067, via `SDPA_BMAT_MODE=fill`) | 434.85 s | 60.92 s — 7.14× | **4.48 s** | **13.6×** |
+| `dE3` (m=6067, sparse route — its default since 2026-08-24) | 434.85 s | 60.92 s — 7.14× | **4.48 s** | **13.6×** |
 
 `dE4` is the striking column: **24 cores buy upstream 4.8%**, because it routes sparse and
 upstream threads neither the sparse Schur-complement Cholesky nor its assembly. Both are threaded
-here. `dE3` routes dense, where upstream *does* scale (7.14×) — the fork's lead there comes from
-taking the sparse route instead.
+here. `dE3` routes dense **under upstream and under this fork's pre-2026-08-24 chooser**, where
+upstream *does* scale (7.14×) — the fork's lead there comes from taking the sparse route instead,
+which is now its default (`SDPA_BMAT_MODE=legacy` restores the old one).
 
 Upstream also scales **negatively** on small problems — 11× slower on `control1` and 3.3× slower
 on `truss5` at 24 threads than at 1 — where this fork's work gating keeps `control1` flat to four

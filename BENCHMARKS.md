@@ -48,7 +48,7 @@ upstream `6eaad8d` interleaved cell by cell. Raw rows and provenance:
 routes sparse and upstream threads *no part* of the sparse path: neither the Schur-complement
 Cholesky nor its assembly. Both are threaded here, which is the whole of the difference.
 
-| `dE3` (m=6067, routes **dense** at default) | 1 | 2 | 4 | 8 | 16 | 24 | 1→24 |
+| `dE3` (m=6067, routes **dense** under upstream and under `legacy`) | 1 | 2 | 4 | 8 | 16 | 24 | 1→24 |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | upstream `6eaad8d` | 434.85 | 409.14 | 211.32 | 120.69 | 71.08 | 60.92 | 7.14× |
 | **this fork** | 176.26 | 168.11 | 88.20 | 49.63 | 27.86 | **22.81** | 7.73× |
