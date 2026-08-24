@@ -509,6 +509,16 @@ sections above flag every instance), so the headline vs-upstream ratios are obse
 end-to-end speedups rather than strictly same-trajectory comparisons. The optimized build's
 own trajectory is identical at every thread count on every machine here.
 
+> **`v7.1.3-omp.2` was not, and this is worth stating where the reproducibility claims are made.**
+> That release carried a data race in the threaded sparse assembly: on a problem routed sparse
+> whose blocks share Schur-complement entries — SDPLIB `truss6` at default settings — it returned
+> a different answer on nearly every run. The tables above are unaffected (their problems either
+> route dense, fall below the threading gate, or were re-measured with repetition), but the
+> *claim* was false for that release and is only true again from `v7.1.3-omp.3`. Note also what
+> the claim's shape cost: stated as identity **across thread counts**, it directed every check at
+> comparisons between thread counts, and a race that moves both sides passes those. The
+> reproducibility evidence below now includes repetition at ONE thread count.
+
 ## Reproducibility evidence
 
 The optimized build is **thread-count independent**: an FNV-1a checksum over every scalar of
