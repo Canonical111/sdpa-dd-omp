@@ -132,14 +132,10 @@ Raw rows and full provenance — build hash, compiler, input and parameter hashe
 and overlap policy per cell: `review/artifacts/dd-port3-2026-08-23/dd_v3_scaling_1t_24t.tsv`.
 
 These are `main loop time` over a **fixed 4-iteration budget** — per-iteration solver cost, not
-time to solution. Measured on `v7.1.3-omp.3`, after the assembly race fix; the fix costs `dE4`
-+0.7% and `dE3`-via-`fill` +2.2% in time.
-
-> The peak-memory cost quoted for `v7.1.3-omp.3` — about 6% on the two sparse-route problems, from
-> the setup pass that decides whether two blocks may overlap — was measured on that release, which
-> held one `int` per stored Schur entry. The pass now uses **two bits** per entry, so the figure no
-> longer describes the current code and is being re-measured. It is quoted here only as the
-> released version's cost, and it errs on the side of overstating our own overhead.
+time to solution. The assembly race fix costs `dE4` +0.7% and `dE3`-via-`fill` +2.2% in time, and —
+since the setup pass that decides whether two blocks may overlap was reduced from one `int` to
+**two bits** per stored Schur entry — **nothing measurable in memory**: `dE4` is 382.0 MB against
+382.2 MB before the fix, and `dE3`-via-`fill` 277.5 MB against 277.5 MB.
 
 Neither problem converged at double-double precision under **either of the two tolerance settings
 tested** — the shipped `epsilonStar=1e-30` and a relaxed `1e-20`. These runs therefore compare a
@@ -153,7 +149,7 @@ is a different experiment, and nothing here rules it out.
 treated as `auto`.
 
 **`fill` is opt-in and can be a large win on large sparse problems.** On dE3 it takes the route
-`auto` declines: **4.5 s against 22.6 s, and 294 MB against 671 MB** — about 5× faster on 2.3× less
+`auto` declines: **4.5 s against 22.6 s, and 277 MB against 671 MB** — about 5× faster on 2.4× less
 memory. It is not the default because the timings behind that decision cover two problem
 structures so far, not the seven the route census identifies. `SDPA_BMAT_LOG=1` prints which gate
 decided and why.
