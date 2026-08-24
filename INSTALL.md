@@ -133,8 +133,13 @@ and overlap policy per cell: `review/artifacts/dd-port3-2026-08-23/dd_v3_scaling
 
 These are `main loop time` over a **fixed 4-iteration budget** — per-iteration solver cost, not
 time to solution. Measured on `v7.1.3-omp.3`, after the assembly race fix; the fix costs `dE4`
-+0.7% and `dE3`-via-`fill` +2.2% in time, and about **6% in peak memory** on both, which is the
-setup pass that decides whether two blocks may overlap.
++0.7% and `dE3`-via-`fill` +2.2% in time.
+
+> The peak-memory cost quoted for `v7.1.3-omp.3` — about 6% on the two sparse-route problems, from
+> the setup pass that decides whether two blocks may overlap — was measured on that release, which
+> held one `int` per stored Schur entry. The pass now uses **two bits** per entry, so the figure no
+> longer describes the current code and is being re-measured. It is quoted here only as the
+> released version's cost, and it errs on the side of overstating our own overhead.
 
 Neither problem converged at double-double precision under **either of the two tolerance settings
 tested** — the shipped `epsilonStar=1e-30` and a relaxed `1e-20`. These runs therefore compare a
