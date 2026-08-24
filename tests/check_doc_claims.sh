@@ -141,7 +141,10 @@ probe "46.6 s as a current 1-thread cell"   INSTALL.md   's/46\.612 s/46.6 s/'
 probe "non-convergence under ANY tolerance" INSTALL.md   's/either of the two tolerance settings/**any** tolerance dd can reach/'
 probe "superseded v.2 value returns"        BENCHMARKS.md 's/| 46\.62 | 47\.06 |/| 47.08 | 47.29 |/'
 probe "upstream table stops naming build"   BENCHMARKS.md 's/both builds `v7.1.3-omp.3` and/both builds and/'
-probe "dE3-fill quoted to 3 sig figs"       INSTALL.md   's/— about 5× faster on 2.3× less/— 4.92× faster on 2.3× less/'
+# Anchored on "about 5×", which is the wording the rule protects, rather than on a neighbouring
+# memory ratio that legitimately changes when the memory is re-measured. (The previous probe was
+# tied to "2.3× less" and went dead the moment that became 2.4×.)
+probe "dE3-fill quoted to 3 sig figs"       INSTALL.md   's/about 5× faster/4.92× faster/'
 
 echo
 if [ "$dead" -eq 0 ]; then
