@@ -1047,6 +1047,107 @@ jobs:
           grep -q "deliberate rError from the true branch, streaming 42 arguments" /tmp/ovgt \
             || { echo "FAIL: exited, but without the streamed diagnostic" >&2; exit 1; }
           echo "  rError exits nonzero and prints the diagnostic on a true condition"
+      - name: advisory available memory -- reported, and never an admission decision
+        run: |
+          set -e
+          # FINDING F. The number is a DIAGNOSTIC: it appears next to the requirement so that
+          # "needs 21 GB" can be read against what the machine has, and nothing branches on it.
+          # A route chosen from free memory would be a route that changes with the machine,
+          # which is exactly the property this fork sells.
+          SDPA_BMAT_LOG=1 ./sdpa_dd -ds example1.dat-s -o /tmp/av.out -p param.sdpa > /tmp/av.log 2>&1
+          grep -aq "GB available (MemAvailable" /tmp/av.log \
+            || { echo "FAIL: no advisory line on a Linux runner, where /proc/meminfo exists" >&2
+                 grep -a "bmat:" /tmp/av.log; exit 1; }
+          # It must be a real reading, not a placeholder: compare against /proc/meminfo itself.
+          said=$(sed -n 's/.*about \([0-9.e+-]*\) GB available.*/\1/p' /tmp/av.log | head -1)
+          real=$(awk '/MemAvailable/ {printf "%.3f", $2/1048576}' /proc/meminfo)
+          echo "  reported ${said} GB, /proc/meminfo says ${real} GB"
+          awk -v a="$said" -v b="$real" 'BEGIN {
+            if (b <= 0 || (a - b) / b > 0.25 || (b - a) / b > 0.25) {
+              printf "FAIL: advisory %s GB is not the machine reading %s GB\n", a, b > "/dev/stderr"; exit 1
+            } }' \
+            || exit 1
+          # And it must carry the host/cgroup caveat rather than presenting itself as the limit.
+          grep -aq "upper bound inside a memory" /tmp/av.log \
+            || { echo "FAIL: advisory omits the host/cgroup caveat" >&2; exit 1; }
+          # The cap message carries it too -- that is the message a stopped job actually reads.
+          set +e
+          SDPA_BMAT_MAX_GB=0.0000000001 ./sdpa_dd -ds example1.dat-s -o /tmp/cap.out \
+            -p param.sdpa > /tmp/cap.log 2>&1
+          cst=$?
+          set -e
+          [ "$cst" -ne 0 ] || { echo "FAIL: the cap did not stop the run" >&2; exit 1; }
+          grep -aq "For reference this host reports about" /tmp/cap.log \
+            || { echo "FAIL: the cap diagnostic does not report available memory" >&2
+                 cat /tmp/cap.log; exit 1; }
+          echo "  cap diagnostic reports available memory alongside the requirement"
+          # NON-VACUITY: the advisory must not change the route. Same problem, and the route
+          # must be identical whether or not logging (hence the advisory) is on.
+          r1=$(SDPA_BMAT_LOG=1 ./sdpa_dd -ds example1.dat-s -o /tmp/r1 -p param.sdpa 2>&1 \
+                 | grep -ao -- "-> [A-Z]*" | head -1)
+          ./sdpa_dd -ds example1.dat-s -o /tmp/r2 -p param.sdpa >/dev/null 2>&1
+          diff <(grep -aE "^(objValPrimal|objValDual|phase.value)" /tmp/r1) \
+               <(grep -aE "^(objValPrimal|objValDual|phase.value)" /tmp/r2) \
+            || { echo "FAIL: turning the advisory on changed the answer" >&2; exit 1; }
+          echo "  advisory does not change the route or the answer (route was $r1)"
+      - name: route boundaries -- exact route under auto, fill and unset
+        run: |
+          set -e
+          # FINDING L. The only route check this fork had compared example1's printed OUTPUT
+          # between unset and `auto`. That cannot detect a silent promotion of `fill` to the
+          # default: on a problem where both routes reach the same answer the output is
+          # identical by construction. So assert the ROUTE, which SDPA_BMAT_LOG=1 prints.
+          #
+          # Expected routes are MEASURED and pinned, not derived: retuning a cutoff is allowed,
+          # but it has to show up here as a failure rather than pass unnoticed.
+          #
+          # case    auto    fill    unset   what it pins
+          # m100    DENSE   DENSE   DENSE   gate 1 is `m > 100`, so m=100 must NOT pass
+          # m101    SPARSE  SPARSE  SPARSE  and m=101 must
+          # nb5     DENSE   DENSE   DENSE   gate 1 is `nBlock > 5`, so 5 must NOT pass
+          # nb6     SPARSE  SPARSE  SPARSE  and 6 must
+          # wide    DENSE   SPARSE  DENSE   POLICY-DIVERGENT: the case that matters
+          # wider   DENSE   DENSE   DENSE   gate 2 trips at half the constraints plus one
+          # dense   DENSE   DENSE   DENSE
+          # band    DENSE   DENSE   DENSE   same aggregate, different cutoff per policy
+          route() { # $1 fixture $2 mode-or-empty
+            if [ -z "$2" ]; then
+              SDPA_BMAT_LOG=1 ./sdpa_dd -ds "$1" -o /tmp/rf.out -p param.sdpa 2>&1
+            else
+              SDPA_BMAT_LOG=1 SDPA_BMAT_MODE="$2" ./sdpa_dd -ds "$1" -o /tmp/rf.out -p param.sdpa 2>&1
+            fi | grep -ao -- "-> [A-Z]*" | head -1 | awk '{print $2}'
+          }
+          fails=0
+          checked=0
+          for spec in m100:DENSE:DENSE:DENSE   m101:SPARSE:SPARSE:SPARSE \
+                      nb5:DENSE:DENSE:DENSE    nb6:SPARSE:SPARSE:SPARSE \
+                      wide:DENSE:SPARSE:DENSE  wider:DENSE:DENSE:DENSE \
+                      dense:DENSE:DENSE:DENSE  band:DENSE:DENSE:DENSE; do
+            case=$(echo "$spec" | cut -d: -f1)
+            exp_auto=$(echo "$spec" | cut -d: -f2)
+            exp_fill=$(echo "$spec" | cut -d: -f3)
+            exp_unset=$(echo "$spec" | cut -d: -f4)
+            python3 tests/gen_route_fixture.py "$case" > /tmp/rf.dat-s
+            a=$(route /tmp/rf.dat-s auto); f=$(route /tmp/rf.dat-s fill); u=$(route /tmp/rf.dat-s "")
+            checked=$((checked+1))
+            printf "  %-6s auto=%-6s fill=%-6s unset=%-6s\n" "$case" "$a" "$f" "$u"
+            [ -n "$a" ] && [ -n "$f" ] && [ -n "$u" ] \
+              || { echo "FAIL: $case produced no route line at all" >&2; fails=$((fails+1)); continue; }
+            [ "$a" = "$exp_auto" ]  || { echo "FAIL: $case auto=$a expected $exp_auto" >&2;  fails=$((fails+1)); }
+            [ "$f" = "$exp_fill" ]  || { echo "FAIL: $case fill=$f expected $exp_fill" >&2;  fails=$((fails+1)); }
+            [ "$u" = "$exp_unset" ] || { echo "FAIL: $case unset=$u expected $exp_unset" >&2; fails=$((fails+1)); }
+            # unset must follow auto, ALWAYS.
+            [ "$u" = "$a" ] || { echo "FAIL: $case unset route $u != auto route $a" >&2; fails=$((fails+1)); }
+          done
+          [ "$checked" -eq 8 ] || { echo "FAIL: only $checked of 8 cases ran" >&2; exit 1; }
+          # NON-VACUITY: at least one case must actually diverge between the policies, or the
+          # unset==auto assertion above is satisfied by every route table and proves nothing.
+          python3 tests/gen_route_fixture.py wide > /tmp/rf.dat-s
+          da=$(route /tmp/rf.dat-s auto); df=$(route /tmp/rf.dat-s fill)
+          [ "$da" != "$df" ] \
+            || { echo "FAIL: 'wide' no longer diverges (auto=$da fill=$df); the unset check is now vacuous" >&2; exit 1; }
+          echo "  policy divergence present on 'wide': auto=$da fill=$df"
+          [ "$fails" -eq 0 ] || { echo "$fails route assertion(s) failed" >&2; exit 1; }
       - name: cross-block assembly -- the race the block-diagonal fixture cannot catch
         run: |
           set -e
@@ -1068,6 +1169,7 @@ jobs:
             || { echo "FAIL: fixture no longer routes sparse; it cannot test the assembly" >&2; exit 1; }
           # 1. repeated runs at a FIXED thread count must agree. This is the property the bug
           #    broke, and thread-count comparison alone would NOT have caught it.
+          rm -f /tmp/xb.objs
           for i in 1 2 3 4 5 6; do
             ./sdpa_dd -ds xb.dat-s -o /tmp/xb.$i -p param.sdpa >/dev/null 2>&1
             grep -a "^objValPrimal" /tmp/xb.$i >> /tmp/xb.objs
@@ -1169,10 +1271,68 @@ jobs:
           fi
           echo "  (4) assembly oracle detects a one-ulp change"
 
-          # Restore a release build for any later step.
+          # (5) FINDING E, first half: the one-member-team FALLBACK. Inside the parallel region
+          #     there is a branch for "num_threads(n) returned fewer than 2", which no input can
+          #     reach on purpose -- the dispatcher's own `team < 2` test exits earlier and by a
+          #     DIFFERENT path. SDPA_SPCHOL_TEAM_OVERRIDE=1 asks the runtime for one thread while
+          #     leaving the gates' team intact, which is the only way in.
+          python3 tests/gen_spchol_fixture.py > spchol_fix.dat-s
+          SDPA_BMAT_MODE=sparse SDPA_SPCHOL_MODE=force SDPA_SPCHOL_LOG=1 \
+            SDPA_SPCHOL_TEAM_OVERRIDE=1 \
+            ./sdpa_dd -ds spchol_fix.dat-s -o /tmp/to.out -p param.sdpa > /tmp/to.log 2>&1
+          grep -aq "received 1; ran serial" /tmp/to.log \
+            || { echo "FAIL: TEAM_OVERRIDE=1 did not reach the one-member-team fallback" >&2
+                 grep -a "spchol:" /tmp/to.log | head -3; exit 1; }
+          #     and the fallback must produce the SAME factor, or it is a second implementation
+          #     of the answer rather than a fallback.
+          rm -f /tmp/fb.bin /tmp/fn.bin
+          SDPA_BMAT_MODE=sparse SDPA_SPCHOL_MODE=force SDPA_SPCHOL_TEAM_OVERRIDE=1 \
+            SDPA_SPCHOL_DIGEST_DUMP=/tmp/fb.bin \
+            ./sdpa_dd -ds spchol_fix.dat-s -o /tmp/fb.out -p param.sdpa >/dev/null 2>&1
+          SDPA_BMAT_MODE=sparse SDPA_SPCHOL_MODE=force SDPA_SPCHOL_DIGEST_DUMP=/tmp/fn.bin \
+            ./sdpa_dd -ds spchol_fix.dat-s -o /tmp/fn.out -p param.sdpa >/dev/null 2>&1
+          [ -s /tmp/fb.bin ] || { echo "FAIL: fallback produced no factor digest" >&2; exit 1; }
+          cmp /tmp/fb.bin /tmp/fn.bin \
+            || { echo "FAIL: the one-member-team fallback produced a different factor" >&2; exit 1; }
+          echo "  (5) one-member-team fallback reached, and its factor is byte-identical"
+
+          # (6) FINDING E, second half: failure RETURN from a partly-threaded factorisation.
+          #     Declare a pivot indefinite well past the first parallel pivots, then require
+          #     that threaded pivots really did run first, that the run reports failure, and
+          #     that the diagnostic says the failure was DECLARED rather than measured.
+          set +e
+          SDPA_BMAT_MODE=sparse SDPA_SPCHOL_MODE=force SDPA_SPCHOL_LOG=1 \
+            SDPA_SPCHOL_FAIL_AT=40 \
+            ./sdpa_dd -ds spchol_fix.dat-s -o /tmp/fa.out -p param.sdpa > /tmp/fa.log 2>&1
+          fst=$?
+          set -e
+          [ "$fst" -ne 0 ] \
+            || { echo "FAIL: FAIL_AT=40 exited 0; the failure path did not propagate" >&2; exit 1; }
+          thr=$(sed -n 's/.*pivots_threaded=\([0-9]*\).*/\1/p' /tmp/fa.log | head -1)
+          [ "${thr:-0}" -ge 1 ] \
+            || { echo "FAIL: failure fired before any pivot ran threaded (pivots_threaded=${thr:-0})," >&2
+                 echo "      so this does not test failure from a partly-threaded factor." >&2; exit 1; }
+          grep -aq "DECLARED by SDPA_SPCHOL_FAIL_AT" /tmp/fa.log \
+            || { echo "FAIL: the diagnostic does not say the failure was injected" >&2; exit 1; }
+          echo "  (6) failure returns from a partly-threaded factor after $thr threaded pivots"
+
+          # (7) and a RELEASE build must refuse both hooks rather than ignore them, or a script
+          #     that sets one and sees a normal run would conclude the branch was covered.
           make clean >/dev/null 2>&1 || true
           ./configure --enable-openmp=yes >/dev/null
           make -j"$(nproc)" >/dev/null
+          for h in SDPA_SPCHOL_TEAM_OVERRIDE=1 SDPA_SPCHOL_FAIL_AT=3; do
+            set +e
+            env $h ./sdpa_dd -ds example1.dat-s -o /tmp/nx.out -p param.sdpa > /tmp/nx 2>&1
+            st=$?
+            set -e
+            [ "$st" -ne 0 ] || { echo "FAIL: release build accepted $h" >&2; cat /tmp/nx; exit 1; }
+            grep -aq "was not built with" /tmp/nx \
+              || { echo "FAIL: $h refused with the wrong diagnostic" >&2; cat /tmp/nx; exit 1; }
+          done
+          echo "  (7) release build refuses both finding-E hooks"
+
+          # Already a release build after (7); nothing further to restore.
       - name: threaded bMat assembly -- identical matrix, and really threaded
         run: |
           set -e

@@ -370,6 +370,47 @@ int spchol_mutate() {
 #endif
 }
 
+// TEST-ONLY, same compile gate as spchol_mutate, and for the same reason: these two exist to
+// reach code that no input can reach on purpose.
+//
+//  SDPA_SPCHOL_TEAM_OVERRIDE=n  asks the runtime for n threads while leaving the team the gates
+//    computed intact. Setting it to 1 is the only way to drive the `here < 2` fallback -- the
+//    branch that handles "num_threads(24) returned one thread". The dispatcher's own `team < 2`
+//    check exits earlier and by a DIFFERENT path (spchol_serial before the region), so without
+//    this hook the fallback inside the region is dead to every test.
+//
+//  SDPA_SPCHOL_FAIL_AT=i  declares pivot i not positive definite. It exists to exercise failure
+//    RETURN from a partly-threaded factorisation: choose an i past several parallel pivots and
+//    the run must report failure through spchol_finish with the digest still emitted, which is
+//    the path a genuinely indefinite Schur complement takes and which no benchmark problem hits.
+//
+// Both are refused outright by a release build rather than ignored, so a script that sets one
+// and sees a normal-looking run cannot conclude the branch was covered.
+static long long spchol_test_ll(const char *name, long long dflt) {
+    const char *e = getenv(name);
+    if (e == NULL || e[0] == '\0') {
+        return dflt;
+    }
+#ifndef SDPA_SPCHOL_TEST_HOOKS
+    rError(name << " is a test hook and this binary was not built with"
+                   " -DSDPA_SPCHOL_TEST_HOOKS, so the hook does not exist here");
+    return dflt;
+#else
+    // Signs are rejected before strtoll, which would otherwise accept "-1" and hand back a
+    // value the callers treat as "unset" -- the same wrap the gate parser was caught on.
+    if (e[0] == '-' || e[0] == '+') {
+        rError(name << " must be a non-negative integer (got \"" << e << "\")");
+    }
+    char *end = NULL;
+    errno = 0;
+    const long long v = strtoll(e, &end, 10);
+    if (end == e || *end != '\0' || errno == ERANGE || v < 0) {
+        rError(name << " must be a non-negative integer (got \"" << e << "\")");
+    }
+    return v;
+#endif
+}
+
 // Parse-and-validate every spchol tunable exactly once per process, on the first Cholesky of
 // EITHER route. Called from both getCholesky overloads, because a problem whose bMat routes dense
 // never reaches the sparse one -- and a validator only one path can reach is not a validator.
@@ -384,6 +425,8 @@ struct SpcholCfg {
     bool digest;      // fingerprint the finished factor
     const char *dump; // NULL, or the exact-comparison sink
     int mutate;       // test hook: the digest's negative control
+    int team_override;   // test hook: threads actually requested; 0 = use the computed team
+    long long fail_at;   // test hook: pivot declared indefinite; -1 = off
 };
 
 // Forward/backward split of the triangular solve, for the Phase-5 verdict. Process-wide
@@ -444,6 +487,16 @@ const SpcholCfg &spchol_cfg() {
         c.digest = spchol_want_digest();
         c.dump = spchol_dump_path();
         c.mutate = spchol_mutate(); // rError()s here on a dense-route problem too, by design
+        // Parsed on EVERY route, like everything else here: a hook that only the sparse route
+        // validates would accept a typo in silence on a dense-route problem.
+        {
+            const long long ov = spchol_test_ll("SDPA_SPCHOL_TEAM_OVERRIDE", 0);
+            if (ov > (long long)INT_MAX) {
+                rError("SDPA_SPCHOL_TEAM_OVERRIDE is absurdly large (" << ov << ")");
+            }
+            c.team_override = (int)ov;
+        }
+        c.fail_at = spchol_test_ll("SDPA_SPCHOL_FAIL_AT", -1);
         if (c.dump != NULL) {
             // Openability is checked HERE, not at the first factorisation, for the same reason
             // SDPA_SPCHOL_MODE is parsed here: a check only the sparse route reaches is not a
@@ -1041,16 +1094,24 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
     // One slot per REQUESTED thread; the region writes only its own index, so no sharing and
     // no reduction clause is needed. Sized on `team` because that is what num_threads asks for.
     const bool count_work = want_log; // the counters exist to be reported; do not pay otherwise
-    std::vector<SpcholWork> per_thread((size_t)(team > 0 ? team : 1));
+    // What num_threads() actually asks for. Identical to `team` in every build that is not a
+    // test build; the override exists only to make the "runtime gave us fewer" branch below
+    // reachable, and the gates' answer is deliberately left untouched so the two cannot be
+    // confused in a log.
+    const int request = (cfg.team_override > 0) ? cfg.team_override : team;
+    const long long fail_at = cfg.fail_at;
+    std::vector<SpcholWork> per_thread((size_t)((team > request ? team : request) > 0
+                                                    ? (team > request ? team : request)
+                                                    : 1));
     for (size_t wi = 0; wi < per_thread.size(); ++wi) {
         per_thread[wi].attempted = 0;
         per_thread[wi].matched = 0;
     }
 
-#pragma omp parallel num_threads(team) default(none)                                        \
+#pragma omp parallel num_threads(request) default(none)                                     \
     shared(aMat, diagonalIndex, fail, failed_pivot, one_thread, one_thread_r,               \
            pivots_par, pivots_seq, actual, max_width, per_thread)                            \
-    firstprivate(nDIM, force, gate_work, gate_width, count_work)
+    firstprivate(nDIM, force, gate_work, gate_width, count_work, fail_at)
     {
         // THE team, read inside the region that owns it. num_threads() is a REQUEST: OMP_DYNAMIC
         // or a resource limit may return fewer threads, including one, and OpenMP does not
@@ -1086,7 +1147,15 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
                 // Only the pivot test and its inverse square root are inherently one-thread work.
 #pragma omp single
                 {
-                    if (!(aMat.sp_ele[a1] > 0.0)) {
+                    // The declared-indefinite hook is tested FIRST so that it reaches a pivot
+                    // the real test would have accepted -- the point is to fail AFTER threaded
+                    // pivots have already run, not to fail somewhere the matrix was bad anyway.
+                    // fail_at is -1 in any build without the hooks, so this is a compare against
+                    // a firstprivate constant the branch predictor never misses.
+                    if (fail_at >= 0 && (long long)i == fail_at) {
+                        fail = true;
+                        failed_pivot = i;
+                    } else if (!(aMat.sp_ele[a1] > 0.0)) {
                         fail = true;
                         failed_pivot = i;
                     } else {
@@ -1140,7 +1209,9 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
 
     if (one_thread) {
         if (want_log) {
-            rMessage("spchol: requested team=" << team << " but received 1; ran serial");
+            rMessage("spchol: requested team=" << request << " but received 1; ran serial"
+                     << (cfg.team_override > 0 ? " :: request set by SDPA_SPCHOL_TEAM_OVERRIDE"
+                                               : ""));
         }
         return spchol_finish(aMat, diagonalIndex, nDIM, cfg, one_thread_r);
     }
@@ -1169,7 +1240,10 @@ bool Lal::getCholesky(SparseMatrix &aMat, int *diagonalIndex) {
     }
     if (fail) {
         rMessage("sparse cholesky miss condition :: not positive definite"
-                 << " :: pivot " << failed_pivot);
+                 << " :: pivot " << failed_pivot
+                 << (cfg.fail_at >= 0 && (long long)failed_pivot == cfg.fail_at
+                         ? " :: DECLARED by SDPA_SPCHOL_FAIL_AT, not measured"
+                         : ""));
         return spchol_finish(aMat, diagonalIndex, nDIM, cfg, FAILURE);
     }
     return spchol_finish(aMat, diagonalIndex, nDIM, cfg, _SUCCESS);

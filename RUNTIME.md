@@ -26,7 +26,7 @@ it.
 |---|---|---|
 | `SDPA_BMAT_MODE` | `auto` (default) · `fill` · `dense` · `sparse` | **yes** — see below |
 | `SDPA_BMAT_MAX_GB` | positive number of GB | no — a safety cap; refuses to allocate beyond it |
-| `SDPA_BMAT_LOG` | `1` | no |
+| `SDPA_BMAT_LOG` | `1` on, `0` off | no — but see the advisory below |
 
 `auto` is the released chooser, unchanged. `fill` uses the fill-derived rule, which routes some
 problems to the sparse factorisation that `auto` sends dense.
@@ -39,6 +39,14 @@ bit-reproducibility against an earlier run, keep the mode fixed.
 `SDPA_BMAT_MAX_GB` fails **closed**: an empty value is an error rather than "no cap", because
 `SDPA_BMAT_MAX_GB="$TYPO"` is the ordinary way an empty value reaches a job script and treating it
 as no-cap would fail open on a safety limit.
+
+**Available memory is reported, never acted on.** With `SDPA_BMAT_LOG=1`, and in the message a
+`SDPA_BMAT_MAX_GB` refusal prints, the dense requirement is shown next to what the machine has
+free, so "needs 21 GB" can be read against something. Nothing branches on it: a route chosen from
+free memory would be a route that changes with the machine, which is the opposite of what this
+fork guarantees. The figure is Linux-only (`MemAvailable` from `/proc/meminfo`; elsewhere the line
+says it is not readable rather than guessing) and it reports the **host**, so inside a memory
+cgroup it is an upper bound.
 
 ## Threading the sparse Cholesky
 
@@ -119,9 +127,20 @@ Require `-DSDPA_SPCHOL_TEST_HOOKS`; refused by a release build.
 | `SDPA_BMAT_ASM_MUTATE=1` | one ulp into the assembled matrix — the assembly oracle's negative control |
 | `SDPA_BMAT_TEST_BREAK_INVARIANT=1` | a violation of the fill ≥ aggregate invariant |
 | `SDPA_BMAT_TEST_F2_STALE=1` | the worst-case stale-`G` read a since-fixed defect could produce |
+| `SDPA_SPCHOL_TEAM_OVERRIDE=n` | asks the runtime for `n` threads while leaving the gates' team alone. `1` is the only way to reach the "requested a team and received one thread" fallback |
+| `SDPA_SPCHOL_FAIL_AT=i` | declares pivot `i` indefinite, so failure can be returned from a factorisation that has already run threaded pivots |
 
 These exist because a comparison that cannot fail is worse than no comparison: it reports success.
 Each has a CI assertion requiring it to actually change what it claims to change.
+
+The last two are the other half of that idea: not negative controls for an oracle, but the only
+way to execute two branches no input reaches on purpose. `TEAM_OVERRIDE=1` reaches the
+one-member-team fallback — the dispatcher's own `team < 2` test exits earlier and by a different
+path, so without the hook that branch is dead to every test — and CI additionally requires the
+fallback's factor to be byte-identical to the threaded one. `FAIL_AT` makes the failure return
+from a partly-threaded factorisation executable; CI requires threaded pivots to have run first,
+or the test would prove nothing about that path. When it fires, the diagnostic says the failure
+was **declared**, not measured.
 
 ## Profiling
 

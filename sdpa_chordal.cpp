@@ -30,6 +30,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <sstream>
 
 namespace sdpa {
 
@@ -417,11 +418,77 @@ double bmat_max_gb() {
     return v;
 }
 
+/* ADVISORY available memory, in GB, or -1 when it cannot be known. Finding F.
+
+   This is a DIAGNOSTIC and never an admission decision, which is the whole design. A route
+   chosen from what the machine happens to have free is a route that changes with the machine,
+   and this fork's central claim is that the answer does not. So nothing branches on this
+   number: it is printed alongside the requirement so that "needs 21 GB" can be read next to
+   "about 6 GB available" instead of leaving the user to find that out from the OOM killer.
+
+   Linux only, and deliberately only MemAvailable -- the kernel's own estimate of what a new
+   allocation can get, which is the question being asked. MemFree is the wrong field (it
+   excludes reclaimable page cache and reads far too low). On every other platform, and on a
+   Linux without /proc mounted, it returns -1 and the caller says nothing rather than guessing.
+
+   CAVEAT, printed with the number rather than buried here: /proc/meminfo reports the HOST. In a
+   container with a memory cgroup limit below the host's free memory, this over-reports -- the
+   cgroup files that would answer correctly differ between cgroup v1 and v2 and between
+   runtimes, and an advisory line does not justify that. Treat it as an upper bound. */
+// "0" means OFF. Until now this knob was tested for PRESENCE only, so the documented way to
+// turn the route log off turned it on -- the identical defect that was found and fixed in
+// SDPA_SPCHOL_LOG, still present in its sibling because the fix was applied to one call site
+// rather than to the pattern. RUNTIME.md already documented `1` here; the code now agrees.
+bool bmat_log_wanted() {
+    const char *e = getenv("SDPA_BMAT_LOG");
+    return (e != NULL && e[0] != '\0' && strcmp(e, "0") != 0);
+}
+
+double bmat_available_gb() {
+#ifdef __linux__
+    FILE *fp = fopen("/proc/meminfo", "r");
+    if (fp == NULL) {
+        return -1.0;
+    }
+    char line[256];
+    double gb = -1.0;
+    while (fgets(line, (int)sizeof(line), fp) != NULL) {
+        unsigned long long kb = 0ULL;
+        // The field is documented in kB regardless of the kernel's page size.
+        if (sscanf(line, "MemAvailable: %llu kB", &kb) == 1) {
+            gb = (double)kb / (1024.0 * 1024.0);
+            break;
+        }
+    }
+    fclose(fp);
+    return gb;
+#else
+    return -1.0;
+#endif
+}
+
 // Enforced on EVERY route to a dense bMat -- gate 1, gate 2, gate 3, gate 4 and forced dense --
 // rather than at one of them, because a cap only some paths consult is not a cap.
 void bmat_dense_cap_check(int m, const char *why) {
     const double cap = bmat_max_gb();
     if (cap < 0.0) {
+        // No cap requested. The advisory still runs when the caller asked to see the route
+        // decision, because "which route, and could this machine have held the other one" is
+        // one question, and answering only half of it is what sends people to the OOM killer.
+        if (bmat_log_wanted()) {
+            const double need = (double)m * (double)m * (double)sizeof(dd_real)
+                                / (1024.0 * 1024.0 * 1024.0);
+            const double avail = bmat_available_gb();
+            if (avail >= 0.0) {
+                rMessage("bmat: dense bMat for m=" << m << " needs " << need
+                         << " GB; about " << avail
+                         << " GB available (MemAvailable, HOST-wide -- an upper bound inside a"
+                            " memory cgroup). Advisory only; no route depends on it");
+            } else {
+                rMessage("bmat: dense bMat for m=" << m << " needs " << need
+                         << " GB; available memory not readable on this platform");
+            }
+        }
         return;
     }
     // m*m in 64 bits: the product overflows int for m > 46341, and this check exists precisely
@@ -429,10 +496,24 @@ void bmat_dense_cap_check(int m, const char *why) {
     const double bytes = (double)m * (double)m * (double)sizeof(dd_real);
     const double gb = bytes / (1024.0 * 1024.0 * 1024.0);
     if (gb > cap) {
+        // The advisory belongs HERE above all: the message a user actually reads is the one
+        // that stopped their job. Reporting the requirement without the machine's side of it
+        // leaves "is 21 GB a lot?" unanswered at the only moment it matters.
+        const double avail = bmat_available_gb();
+        std::ostringstream note;
+        if (avail >= 0.0) {
+            note << " For reference this host reports about " << avail
+                 << " GB available (MemAvailable; HOST-wide, so an upper bound inside a memory"
+                    " cgroup). It is advisory: no route was chosen from it.";
+        } else {
+            note << " Available memory is not readable on this platform, so this message cannot"
+                    " say whether the machine could have held it.";
+        }
         rError("dense bMat for m=" << m << " needs " << gb << " GB (" << sizeof(dd_real)
                << " B/element), over the SDPA_BMAT_MAX_GB cap of " << cap
                << " GB; route chosen by " << why
-               << ". Raise the cap, or use SDPA_BMAT_MODE=fill/sparse if the problem admits it.");
+               << ". Raise the cap, or use SDPA_BMAT_MODE=fill/sparse if the problem admits it."
+               << note.str());
     }
 }
 
@@ -495,7 +576,7 @@ void Chordal::ordering_bMat(int m, int nBlock, InputData &inputData, FILE *fpOut
     // dense-route problem would otherwise never validate the hook variable and a build without
     // the test gate would silently accept it. Same lesson as bmat_mode() above.
     const bool break_inv = bmat_test_break_invariant();
-    const bool want_log = (getenv("SDPA_BMAT_LOG") != NULL);
+    const bool want_log = bmat_log_wanted();
     // Gate 2's cutoff: auto's expression verbatim, or fill's own decoupled constant.
     const double g2 = (mode == BMAT_FILL) ? (BMAT_FILL_BLOCK_FRACTION * m)
                                           : (m * sqrt(aggregate_threshold));
