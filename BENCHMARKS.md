@@ -34,32 +34,15 @@ nothing else.
 
 ### The large sparse problems — where upstream gains almost nothing
 
-> ### ⚠️ Historical: `v7.1.3-omp.2` campaign — superseded, not current
->
-> **The fork rows in this section predate the assembly race fix.** They were measured on
-> `v7.1.3-omp.2`, and the `dE4` and `dE3`-via-`fill` cells ran the susceptible sparse path. The
-> race-fixed rerun of the headline cells moves those timings by under 3%, but these rows are
-> **not** `v7.1.3-omp.3` measurements and should not be quoted as such.
->
-> **Current release figures** — same host, same four-iteration protocol, race-fixed tree
-> (`dd_final_headline_postfix.tsv`): `dE4` **6.495 s**, `dE3` default **22.595 s**, `dE3` via
-> `fill` **4.592 s / 294.5 MB**.
->
-> A full paired rerun against upstream on the fixed tree is open work. Upstream's own columns are
-> unaffected — that is a different build entirely — and the *shape* of the result (upstream gains
-> ~5% from 24 cores on `dE4` because it threads no part of the sparse path) is a structural fact
-> about upstream, not a timing artefact.
->
-> **Two repeats per cell**, which is below this project's later standard of three; a "median" of
-> two is not a middle observation. The replacement campaign will use at least three.
-
-`main loop time` over a fixed 4-iteration budget, medians of 2:
+`main loop time` over a fixed 4-iteration budget, **medians of 3**, both builds `v7.1.3-omp.3` and
+upstream `6eaad8d` interleaved cell by cell. Raw rows and provenance:
+`review/artifacts/dd-port3-2026-08-23/dd_upstream_vs_v3.tsv`.
 
 | `dE4` (m=7401, routes **sparse**) | 1 | 2 | 4 | 8 | 16 | 24 | 1→24 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| upstream `6eaad8d` | 49.19 | 49.12 | 47.76 | 47.13 | 46.91 | 46.93 | **1.05×** |
-| **this fork** | 47.08 | 47.29 | 24.38 | 14.11 | 8.31 | **6.44** | **7.31×** |
-| fork advantage | 1.04× | 1.04× | 1.96× | 3.34× | 5.64× | **7.29×** | |
+| upstream `6eaad8d` | 49.24 | 49.14 | 47.80 | 47.14 | 46.90 | 46.95 | **1.05×** |
+| **this fork** | 46.62 | 47.06 | 24.26 | 14.14 | 8.29 | **6.49** | **7.19×** |
+| fork advantage | 1.06× | 1.04× | 1.97× | 3.33× | 5.66× | **7.24×** | |
 
 **Upstream gets 4.8% out of 24 cores on `dE4`.** Not a regression — nothing at all, because `dE4`
 routes sparse and upstream threads *no part* of the sparse path: neither the Schur-complement
@@ -67,15 +50,15 @@ Cholesky nor its assembly. Both are threaded here, which is the whole of the dif
 
 | `dE3` (m=6067, routes **dense** at default) | 1 | 2 | 4 | 8 | 16 | 24 | 1→24 |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| upstream `6eaad8d` | 434.62 | 408.85 | 211.26 | 121.36 | 70.81 | 60.84 | 7.14× |
-| **this fork** | 176.82 | 168.20 | 88.26 | 48.92 | 27.69 | **22.93** | 7.71× |
-| fork advantage | **2.46×** | 2.43× | 2.39× | 2.48× | 2.56× | 2.65× | |
+| upstream `6eaad8d` | 434.85 | 409.14 | 211.32 | 120.69 | 71.08 | 60.92 | 7.14× |
+| **this fork** | 176.26 | 168.11 | 88.20 | 49.63 | 27.86 | **22.81** | 7.73× |
+| fork advantage | **2.47×** | 2.43× | 2.40× | 2.43× | 2.55× | 2.67× | |
 
 `dE3` is the honest counter-example: upstream **does** scale here, 7.14×, because it routes dense
-and the dense path *is* threaded upstream. The fork's lead at 24 threads is 2.65× — and **13.5×**
-with `SDPA_BMAT_MODE=fill`, which takes the sparse route upstream cannot thread (4.49 s).
+and the dense path *is* threaded upstream. The fork's lead at 24 threads is 2.67× — and **13.6×**
+with `SDPA_BMAT_MODE=fill`, which takes the sparse route upstream cannot thread (4.48 s).
 
-The 1-thread column is worth its own note: **2.46× before any threading enters**, from the
+The 1-thread column is worth its own note: **2.47× before any threading enters**, from the
 `Rgemm` zero-skip and the FP-contraction pin.
 
 ### Two problems from a user, and what they show

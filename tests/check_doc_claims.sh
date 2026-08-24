@@ -62,15 +62,26 @@ for f in README.md INSTALL.md BENCHMARKS.md; do
   fi
 done
 
-# --- 5. superseded pre-race-fix tables must carry a historical label -----------------------------
-# The v.2 upstream/scaling tables are kept on purpose. They must announce which build they are.
-if grep -qE '^\| \*\*this fork\*\* \| 47\.08' BENCHMARKS.md; then
-  grep -qE 'Historical: `v7\.1\.3-omp\.2` campaign' BENCHMARKS.md \
-    || bad "BENCHMARKS.md keeps the v.2 scaling table without its historical label"
+# --- 5. the comparison tables must be v.3 numbers, and must name the build -----------------------
+# The v.2 campaign's fork rows were replaced by a v.3 rerun. Two things can go wrong: a v.2 value
+# creeping back in, or a table losing the statement of which build it measured. Both are checked.
+# (The earlier form of this rule guarded a "historical" label on the v.2 tables. When those tables
+# were replaced the rule silently stopped guarding anything -- the --self-test below caught that,
+# which is what it is for.)
+for pat in '47\.08' '6\.44 s' '7\.31×' '7\.29×' '13\.5×' '2\.65×' '60\.84' '434\.62'; do
+  for f in README.md BENCHMARKS.md; do
+    if current_claims "$f" | grep -qE "$pat"; then
+      bad "$f still carries the superseded v7.1.3-omp.2 value $pat"
+    fi
+  done
+done
+if grep -qE '^\| upstream `6eaad8d`' BENCHMARKS.md; then
+  grep -qE 'both builds `v7\.1\.3-omp\.3` and' BENCHMARKS.md \
+    || bad "BENCHMARKS.md's upstream tables do not name the fork build they measured"
 fi
-if grep -qE '6\.44 s — 7\.31×' README.md; then
-  grep -qE 'Historical: `v7\.1\.3-omp\.2` campaign' README.md \
-    || bad "README.md keeps the v.2 upstream table without its historical label"
+if grep -qE 'upstream, 24 threads' README.md; then
+  grep -qE "Measured 2026-08-24 on \`v7\.1\.3-omp\.3\`" README.md \
+    || bad "README.md's upstream table does not name the fork build and date"
 fi
 
 # --- 6. the jittery dE3-fill cell must not be quoted to three significant figures ---------------
@@ -128,8 +139,8 @@ probe "release described as pending"        README.md    's|Fixed in \[`v7.1.3-o
 probe "dE4 headline back to 7.17x"          INSTALL.md   's/7\.28×/7.17×/'
 probe "46.6 s as a current 1-thread cell"   INSTALL.md   's/46\.612 s/46.6 s/'
 probe "non-convergence under ANY tolerance" INSTALL.md   's/either of the two tolerance settings/**any** tolerance dd can reach/'
-probe "v.2 scaling table unlabelled"        BENCHMARKS.md 's/Historical: `v7.1.3-omp.2` campaign/Current campaign/'
-probe "v.2 upstream table unlabelled"       README.md    's/Historical: `v7.1.3-omp.2` campaign/Current campaign/'
+probe "superseded v.2 value returns"        BENCHMARKS.md 's/| 46\.62 | 47\.06 |/| 47.08 | 47.29 |/'
+probe "upstream table stops naming build"   BENCHMARKS.md 's/both builds `v7.1.3-omp.3` and/both builds and/'
 probe "dE3-fill quoted to 3 sig figs"       INSTALL.md   's/— about 5× faster on 2.3× less/— 4.92× faster on 2.3× less/'
 
 echo

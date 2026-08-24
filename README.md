@@ -91,20 +91,14 @@ change.
 **On the large sparse problems the gap is much wider, because upstream's threading does not
 reach them at all.**
 
-> **Historical: `v7.1.3-omp.2` campaign, superseded.** The fork columns below were measured before
-> the assembly race was fixed, and two of their cells (`dE4`, `dE3` via `fill`) ran the susceptible
-> sparse path. The race-fixed rerun moves those timings by under 3%, but these are **not**
-> `v7.1.3-omp.3` measurements. A full paired rerun against upstream on the fixed tree is open work;
-> the current release's own figures are in the headline above. Upstream's columns are unaffected —
-> they are a different build entirely.
-
-Measured 2026-08-23 against upstream `6eaad8d` — the commit this fork branched from and still its
-`master` — rebuilt from its own recipe, i9-13900K at 24 threads:
+Measured 2026-08-24 on `v7.1.3-omp.3` against upstream `6eaad8d` — the commit this fork branched
+from and still its `master` — each rebuilt from its own recipe, i9-13900K, **medians of three**,
+the two builds interleaved cell by cell:
 
 | | upstream, 1 thread | upstream, 24 threads | **this fork, 24 threads** | fork vs upstream |
 |---|---:|---:|---:|---:|
-| `dE4` (m=7401, routes sparse) | 49.19 s | 46.93 s — **1.05×** | **6.44 s — 7.31×** | **7.29×** |
-| `dE3` (m=6067, via `SDPA_BMAT_MODE=fill`) | 434.62 s | 60.84 s — 7.14× | **4.49 s** | **13.5×** |
+| `dE4` (m=7401, routes sparse) | 49.24 s | 46.95 s — **1.05×** | **6.49 s — 7.19×** | **7.24×** |
+| `dE3` (m=6067, via `SDPA_BMAT_MODE=fill`) | 434.85 s | 60.92 s — 7.14× | **4.48 s** | **13.6×** |
 
 `dE4` is the striking column: **24 cores buy upstream 4.8%**, because it routes sparse and
 upstream threads neither the sparse Schur-complement Cholesky nor its assembly. Both are threaded
