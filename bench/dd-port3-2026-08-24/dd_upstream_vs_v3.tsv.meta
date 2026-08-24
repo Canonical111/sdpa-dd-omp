@@ -1,0 +1,51 @@
+# PAIRED UPSTREAM-VS-FORK THREAD SCALING, RERUN ON v7.1.3-omp.3.
+#
+# WHY. The published scaling and upstream-comparison tables were measured on v7.1.3-omp.2, and two
+# of their fork cells (dE4, dE3-via-fill) ran the sparse path that carried the assembly race. The
+# benchmark/README audit required either an explicit historical label or a rerun; this is the
+# rerun, and it replaces those tables.
+#
+# WHAT CHANGED FROM THE v.2 CAMPAIGN'S METHOD, per the round-6 review:
+#   THREE repeats per cell, not two. A "median" of two is not a middle observation and gives
+#   little protection against host noise. The time budget grew to ~2.5 h rather than the repeat
+#   count shrinking.
+#   BUILDS INTERLEAVED at every cell (upstream then fork, cell by cell, repeat by repeat), so
+#   neither build systematically occupies a hotter or busier part of the run.
+#
+# PROVENANCE (captured by the run)
+#   upstream commit  6eaad8d9abff929bf8abc55ea166cbb2b09d07df   -- the commit this fork branched
+#                    from and still its master; the comparison isolates the fork's changes
+#   upstream binary  6a6e18f23d19cc6d8a738b4a1245c4ac86fd6dd7...
+#   fork tag         v7.1.3-omp.3
+#   fork commit      e660d19f9fbc212ebfbb2b064b86d9531d61e14e   (clean tree, 0 modified)
+#   fork binary      9681987557e4d13b8f305cf4236cf44021d4183e...
+#   param            9197d394cb3907c83ac3c021af7eef9241952030... (shipped param.sdpa, maxIter -> 4)
+#   compiler         g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, each build from its OWN recipe
+#   host             pi -- i9-13900K, 24 physical cores, Ubuntu, idle
+#   pinning          OMP_PROC_BIND=true OMP_PLACES=cores OMP_MAX_ACTIVE_LEVELS=1,
+#                    taskset -c 0-(threads-1), identical for both builds
+#   fork route       dE4: gate4 -> SPARSE, blocks_disjoint=0, overlap=barrier
+#
+# ---- MEDIANS OF THREE, main loop time over a fixed 4-iteration budget ----
+#
+#   dE4 (m=7401, routes SPARSE)      1t      2t      4t      8t     16t     24t    1->24
+#     upstream 6eaad8d            49.24   49.14   47.80   47.14   46.90   46.95    1.05x
+#     this fork v7.1.3-omp.3      46.62   47.06   24.26   14.14    8.29    6.49    7.19x
+#     fork advantage               1.06x   1.04x   1.97x   3.33x   5.66x   7.24x
+#
+#   dE3 (m=6067, routes DENSE)       1t      2t      4t      8t     16t     24t    1->24
+#     upstream 6eaad8d           434.85  409.14  211.32  120.69   71.08   60.92    7.14x
+#     this fork v7.1.3-omp.3     176.26  168.11   88.20   49.63   27.86   22.81    7.73x
+#     fork advantage               2.47x   2.43x   2.40x   2.43x   2.55x   2.67x
+#
+#   dE3 via SDPA_BMAT_MODE=fill at 24 threads is 4.475 s (dd_v3_scaling_1t_24t.tsv), so the fork's
+#   advantage on dE3 becomes 60.92 / 4.475 = 13.6x when the sparse route is taken.
+#
+# THE SHAPE IS UNCHANGED FROM v.2, WHICH IS THE POINT: upstream gains ~5% from 24 cores on dE4
+# because it threads NO part of the sparse path -- neither the Schur Cholesky nor its assembly --
+# while it does scale on dE3, which routes dense and whose dense path upstream threads. That is a
+# structural fact about upstream, not a timing artefact, and the race fix did not move it.
+#
+# Agreement with the superseded v.2 campaign is close, as expected from a fix costing under 3%:
+# dE4 advantage 7.24x here against 7.29x there; dE3 2.67x against 2.65x. The v.2 rows are not
+# wrong; they are simply not measurements of the current release.

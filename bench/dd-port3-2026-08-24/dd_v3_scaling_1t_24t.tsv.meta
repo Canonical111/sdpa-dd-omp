@@ -1,0 +1,73 @@
+# WITHIN-RELEASE SCALING: v7.1.3-omp.3 at 1 AND 24 THREADS, from ONE binary in ONE session.
+#
+# WHY THIS FILE EXISTS. INSTALL.md carried a table labelled "1 thread / 24 threads" whose
+# 1-thread cell came from the HISTORICAL unmodified fork and whose 24-thread cell came from the
+# current release. Two builds, presented as one scaling measurement. The round-6 review required
+# both ends to come from one release build, and this is that measurement. It also supersedes the
+# earlier plan of "add the missing 1-thread rows beside the existing 24-thread file", which would
+# have left a cross-build seam.
+#
+# PROVENANCE (captured by the run, not asserted afterwards)
+#   tag        v7.1.3-omp.3
+#   commit     e660d19f9fbc212ebfbb2b064b86d9531d61e14e
+#   clean tree 0 modified files
+#   binary     fdb42109d0820463edaeef132c12e791f4c4a49e5da799ebd79bfe132173ce24
+#   compiler   g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+#   configure  ./configure --enable-openmp=yes
+#   param      9197d394cb3907c83ac3c021af7eef9241952030d2647af2fb045eab8d308853
+#              (the fork's OWN shipped param.sdpa, maxIteration -> 4)
+#   input dE4  e57a8904d4f35bbdf32b4df9af6175163ca3f46b96a1d8fc58f3adf2956a0be5
+#   input dE3  97cfeb508ffeb10d42aebd6cee83f26538b59fdd4325254964cf3405af8a4ad0
+#   host       pi -- i9-13900K, 24 physical cores, Ubuntu
+#   omp env    OMP_PROC_BIND=true OMP_PLACES=cores OMP_MAX_ACTIVE_LEVELS=1
+#   affinity   taskset -c 0-23 at 24 threads, taskset -c 0 at 1 thread
+#   rss        /usr/bin/time -v "Maximum resident set size"
+#
+# ROUTE AND OVERLAP POLICY, logged in the same session:
+#   dE4 auto   gate4 fill=13364097 -> SPARSE   blocks_disjoint=0  overlap=barrier
+#   dE3 auto   gate3 aggregate=9443183 cutoff=9.20212e+06 -> DENSE
+#   dE3 fill   gate4 fill=9551057  -> SPARSE   blocks_disjoint=0  overlap=barrier
+#
+# ORDER: 3 repeats, INTERLEAVED repeat-major (all six cells, then again, then again) so any host
+# drift spreads across cells instead of loading onto whichever ran last.
+#
+# MEDIANS OF THREE
+#
+#   cell                     1 thread    24 threads    1->24
+#   dE4, sparse (default)    46.612 s       6.399 s    7.28x
+#   dE3, dense (default)    176.357 s      22.645 s    7.79x
+#   dE3, sparse (fill)       31.370 s       4.475 s    7.01x
+#
+#   dE3 fill vs dE3 default, both at 24 threads: 22.645 / 4.475 = 5.06x
+#   peak RSS at 24 threads: dE4 405.8 MB, dE3 auto 670.7 MB, dE3 fill 294.4 MB
+#
+# BIT-IDENTITY, CONFIRMED HERE AS A SIDE EFFECT AND WORTH MORE THAN THE TIMINGS:
+#   every cell returns ONE objective across all three repeats, and the SAME objective at 1 and 24
+#   threads -- 2.1206252458976116e+07 for dE4, 2.0886785242906671e+07 for dE3. dE3's DENSE and
+#   SPARSE routes also agree with each other to every printed digit. 18 runs, 2 distinct values,
+#   one per problem.
+#
+# ---- OBSERVED SPREAD, and one cell that does not support three significant figures ----
+#
+#   cell             min       med       max    spread
+#   dE4 auto 1t   46.611    46.612    46.615      0.0%
+#   dE4 auto 24t   6.381     6.399     6.506      2.0%
+#   dE3 auto 1t  176.289   176.357   176.383      0.1%
+#   dE3 auto 24t  22.446    22.645    23.009      2.5%
+#   dE3 fill 1t   31.341    31.370    31.377      0.1%
+#   dE3 fill 24t   4.339     4.475     4.895    *12.4%*
+#
+# The 1-thread cells are essentially exact (<=0.1%), so this is not host drift -- it is threading
+# jitter on a short (~4.5 s) 24-thread cell. Pooling this run's three dE3-fill-24t values with the
+# three from dd_final_headline_postfix.tsv gives six spanning 4.339-4.895 s, a 12.3% spread about
+# a 4.533 s median.
+#
+# CONSEQUENCE, stated rather than smoothed over: the campaign's declared +/-3% noise band does NOT
+# hold for this cell. Any ratio derived from it -- the dE3 fill-versus-default figure, quoted at
+# various times as 5.00x, 4.92x and 5.06x -- is really "about 5x", and the published wording says
+# so. The dE4 and dE3-dense cells are within the band and do support their quoted figures.
+#
+# RELATION TO dd_final_headline_postfix.tsv: that file is the before/after against the historical
+# baseline; this one is within-release scaling. They share the dE4 24-thread cell and agree to
+# 0.8% (medians 6.452 vs 6.399, six pooled values spanning 1.9%). Neither supersedes the other;
+# they answer different questions and each published table names the one it came from.

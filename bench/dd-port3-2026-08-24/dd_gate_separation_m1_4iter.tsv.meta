@@ -1,0 +1,13 @@
+# PHASE 5, M1 ARM at the 4-iteration budget. Pair file: dd_gate_separation_pi_4iter.tsv, whose
+# metadata carries the full analysis of BOTH arms -- read that one for the result.
+#
+# HOST: CANONICAL111 -- Apple M1 Max, 10 physical cores, aarch64, macOS, g++-16. A working laptop,
+#       so the serial/parallel RATIOS are the figure of merit, not the absolute seconds.
+# PROTOCOL: identical to the pi arm -- SDPA_BMAT_MODE=sparse, assembly forced serial and parallel,
+#       SDPA_BMAT_ASM_PROFILE=1 for the `asm SDP` sub-phase, 3 repeats, medians, shipped param.sdpa
+#       with maxIteration -> 4. verdict: win = serial/parallel > 1.5.
+# BUILD: dev at the two-bitset commit.
+#
+# This file exists because an earlier M1 sweep used the shipped param.sdpa UNCHANGED
+# (maxIteration=200) while the pi sweep used 4, making the two incomparable in absolute time. This
+# is the redo at the matching budget; use it and the pi file together for anything cross-machine.

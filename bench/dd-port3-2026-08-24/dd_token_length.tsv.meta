@@ -1,0 +1,48 @@
+# TOKEN LENGTH ISOLATED PROPERLY, at 45 significant digits, 5 repeats per cell.
+#
+# WHY THIS RERUN EXISTS. The original claim was that truncating _max.dat-s to 30 significant
+# digits "leaves the values unchanged, since double-double resolves ~32 digits". That is
+# arithmetically false -- 30 is INSIDE 32 -- so the 30-digit run could not separate token length
+# from value change. Round 4 of review caught it. 45 digits is past dd's ~32 and far below QD's
+# ~309-digit converter limit, so it varies the TEXT while leaving the value alone at dd precision.
+#
+# HOST: pi -- i9-13900K, Ubuntu, gcc. Default thread count, unpinned: this is a correctness
+#       experiment about a READER, and nothing here is a timing.
+# INPUT: input/sdpaquestions/_max.dat-s -- the user's own problem, m=16, 7 blocks, 601-digit
+#        mantissas -- with the user's own input/sdpaquestions/paramdd.sdpa.
+# BUILDS: upstream nakatamaho/sdpa-dd @ 6eaad8d, the commit this fork branched from and still its
+#         master; fork at v7.1.3-omp.2. The fork's reader fix is commit 27449eb.
+# HOW THE TRUNCATED INPUTS WERE MADE: truncate_significant_digits.py, archived beside this file.
+#        It rewrites every decimal token through Python's `decimal` at a set precision, so the
+#        rounding is a documented operation and not a regex chop. Reproduce with:
+#            python3 truncate_significant_digits.py _max.dat-s 45 > max45.dat-s
+#            python3 truncate_significant_digits.py _max.dat-s 30 > max30.dat-s
+#        Longest token in each: 600, 45, 30 (column 3, measured per run, not asserted).
+#
+# WHAT THE ROWS ESTABLISH
+#
+# Shortening the token -- and nothing else -- moves upstream from dFEAS at iteration 0 to pdOPT in
+# 43 iterations. That is the whole result, and it is in the PHASE and ITERATION columns.
+#
+# READ THE OBJECTIVE COLUMN WITH CARE: threaded upstream is nondeterministic, on this problem as
+# on the others this fork benchmarks. Over 5 runs per cell:
+#   _max.dat-s   upstream span -0.0000000000000000e+00 .. -0.0000000000000000e+00
+#   max45.dat-s  upstream span -2.2168869944396093e-02 .. -2.2168869935064072e-02
+#   max30.dat-s  upstream span -2.2168869947130927e-02 .. -2.2168869942785760e-02
+# i.e. 5 distinct objectives in 5 runs on each input it solves. An earlier version of this table
+# quoted ONE upstream objective per row as though it were reproducible; it is not, and the
+# single-variable claim does not need it. The fork returns one value in all 5 runs of every cell.
+#
+# The fork's three answers span the 600-, 45- and 30-digit inputs by 1.0e-10 relative -- they
+# agree to 10 significant digits. That is what a LAST-BIT change in the parsed dd_real looks like
+# after 43 iterations, so the 45-digit input is the same problem to within one ulp of dd
+# precision, and a one-ulp input change cannot turn a NaN into a correct solve.
+#
+# LIMIT OF THE CLAIM, stated because the reviewer asked for it explicitly: this is a
+# same-problem-to-within-one-ulp argument, not a bit-for-bit comparison of the parsed two-limb
+# values. Instrumenting the reader to dump both limbs would settle it exactly; that was not done.
+# What is established is that the converter's length limit is the cause, and that no plausible
+# value change accounts for a NaN.
+#
+# Ruled out separately: -ffp-contract. Rebuilding upstream with ONLY -ffp-contract=off added still
+# fails at iteration 0 on the 600-digit input -- see ../dd-port2-2026-08-23/dd_max_scaling.tsv.meta.

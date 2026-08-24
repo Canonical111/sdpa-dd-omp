@@ -1,0 +1,13 @@
+build	problem	mode	repeat	mainloop_s	rss_kb
+int-stamp	dE4	auto	1	6.580556	415488
+int-stamp	dE4	auto	2	6.482709	415484
+int-stamp	dE4	auto	3	6.484166	415604
+int-stamp	dE3	fill	1	4.444691	301340
+int-stamp	dE3	fill	2	4.416509	301308
+int-stamp	dE3	fill	3	4.412381	301284
+bitset	dE4	auto	1	6.500488	391444
+bitset	dE4	auto	2	6.377687	391104
+bitset	dE4	auto	3	6.711955	391144
+bitset	dE3	fill	1	4.477644	284172
+bitset	dE3	fill	2	4.508440	284192
+bitset	dE3	fill	3	4.498871	283880

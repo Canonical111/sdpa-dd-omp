@@ -129,7 +129,7 @@ medians of three interleaved repeats — dE3 (m=6067) and dE4 (m=7401):
 > support theirs.
 
 Raw rows and full provenance — build hash, compiler, input and parameter hashes, affinity, route
-and overlap policy per cell: `review/artifacts/dd-port3-2026-08-23/dd_v3_scaling_1t_24t.tsv`.
+and overlap policy per cell: [bench/dd-port3-2026-08-24/dd_v3_scaling_1t_24t.tsv](bench/dd-port3-2026-08-24/dd_v3_scaling_1t_24t.tsv).
 
 These are `main loop time` over a **fixed 4-iteration budget** — per-iteration solver cost, not
 time to solution. The assembly race fix costs `dE4` +0.7% and `dE3`-via-`fill` +2.2% in time, and —
@@ -175,7 +175,7 @@ under the tolerances tested, so no time-to-solution comparison exists to quote. 
 is that on per-iteration cost and peak memory, `fill` dominates on every structure that
 distinguishes the policies.
 
-Raw rows: `review/artifacts/dd-port3-2026-08-23/dd_fill_seven_structures.tsv`.
+Raw rows: [bench/dd-port3-2026-08-24/dd_fill_seven_structures.tsv](bench/dd-port3-2026-08-24/dd_fill_seven_structures.tsv).
 
 `SDPA_BMAT_MAX_GB` caps the dense allocation and is enforced on every route to dense, so a problem
 that would silently need more memory than you have fails with a number instead.
@@ -192,7 +192,7 @@ that would silently need more memory than you have fails with a number instead.
 | iteration count differs across compilers | FP contraction | see the README's `-ffp-contract=off` note |
 
 Every environment variable, the exit-status contract, and what each knob can and cannot change
-are documented in [doc/technical.pdf](doc/technical.pdf) where present, and in the README.
+are documented in [RUNTIME.md](RUNTIME.md), which is the maintained reference for all 25 of them.
 
 ## A successful build leaves the tree almost clean
 

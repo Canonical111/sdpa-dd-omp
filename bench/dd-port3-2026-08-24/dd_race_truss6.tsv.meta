@@ -1,0 +1,21 @@
+# THE DEFECT, on one line per run.
+#
+# SDPLIB truss6.dat-s at DEFAULT SETTINGS -- no environment variables of any kind. It routes
+# sparse under the released `auto` policy (gate 4) and its 10,902 constraint pairs clear the
+# 8,000-pair assembly gate, so the threaded assembly runs. Its 151 blocks share Schur-complement
+# entries, so under the released `nowait` two workers in adjacent blocks could accumulate into
+# the same dd_real.
+#
+# HOST: CANONICAL111, Apple M1 Max, 10 cores, aarch64, macOS. Thread count NOT varied and NOT
+#       pinned: that is the point. Every row above is the same binary, same input, same
+#       environment, same machine.
+# BUILDS: "v7.1.3-omp.2" is the released tree rebuilt locally from the tag; "fixed" is dev with
+#       the conditional barrier.
+#
+# The correct objective is -9.0100140477088098e+02. Note run 3 of the racing build:
+# -9.0093934416427931e+02, which is wrong in the fifth significant digit rather than obviously
+# absurd. A tolerance-based comparison against a reference would have accepted it.
+#
+# WHY NO EXISTING CHECK CAUGHT IT: the fork's thread-invariance harness compares 1 thread against
+# N. Here BOTH sides move, so the comparison is between two wrong answers and can pass. The check
+# that catches it is repetition at ONE thread count, which is now in CI and in INSTALL.md.

@@ -1,0 +1,52 @@
+# PHASE 5, TWO ARCHITECTURES AT A MATCHED PROTOCOL.
+#
+# Pair file: dd_gate_separation_m1_4iter.tsv (Apple M1 Max, 10 cores, aarch64).
+# This file:  pi (i9-13900K, 24 cores, x86-64).
+# Both: 12 problems, SDPA_BMAT_MODE=sparse, assembly forced serial and parallel,
+# SDPA_BMAT_ASM_PROFILE=1, 3 repeats, medians, shipped param.sdpa with maxIteration -> 4.
+# Build: dev at the bitset commit. verdict: win = serial/parallel > 1.5.
+#
+# ERRATUM ON THE EARLIER TABLE. dd_gate_separation_m1.tsv used the shipped param.sdpa UNCHANGED --
+# maxIteration=200, not 4 -- while the pi sweep used 4. Its ratios are internally valid (both arms
+# shared the param) but its absolute times are ~20x larger and it cannot be compared with pi. The
+# M1 sweep was repeated at the matching budget; that is the _4iter file, and it supersedes the
+# other for any cross-machine statement.
+#
+# ---- RESULT ----
+#
+#   problem       pairs  p/blk |   M1 ratio  verdict |   pi ratio  verdict | agree
+#   truss6        10902     72 |     0.05x     loss  |     0.39x     loss  | yes
+#   max_cs          359     51 |     0.13x     loss  |     0.26x     loss  | yes
+#   8_min           833     83 |     0.18x     loss  |     0.49x     loss  | yes
+#   control1        351    176 |     0.29x     loss  |     0.42x     loss  | yes
+#   gpp100         5151   5151 |     0.29x     loss  |     0.12x     loss  | yes
+#   spchol_fix      864     36 |     0.30x     loss  |     0.18x     loss  | yes
+#   crossblock    19680    820 |     0.30x     loss  |     1.66x     WIN   | *** NO ***
+#   10_max        16219   1352 |     5.85x     win   |     6.66x     win   | yes
+#   10_min        16219   1352 |     5.98x     win   |     7.21x     win   | yes
+#   12_min       397430  24839 |     6.61x     win   |     6.18x     win   | yes
+#   9_min         20847   2316 |     6.90x     win   |     6.95x     win   | yes
+#   arch0         15225   7612 |     7.64x     win   |     9.84x     win   | yes
+#
+# ELEVEN OF TWELVE AGREE. The single disagreement, crossblock, is genuinely marginal -- 1.66x on
+# pi is barely over the 1.5 threshold -- and it is the case that decides everything below.
+#
+#   separation of wins from losses:
+#     M1 alone      total pairs   max(loss) 19,680 vs min(win) 15,225   OVERLAPS
+#     pi alone      total pairs   max(loss) 10,902 vs min(win) 15,225   separates
+#     COMBINED      total pairs   max(loss) 19,680 vs min(win) 15,225   OVERLAPS
+#     all three     pairs/block   max(loss)  5,151 vs min(win)  1,352   OVERLAPS
+#
+# CORRECTION TO A CLAIM I MADE FROM THE M1 ALONE. I wrote that total pairs "cannot be repaired by
+# moving the threshold -- the VARIABLE is wrong". That is true on the M1 and true combined, but
+# NOT true on pi, where a threshold between 10,902 and 15,225 classifies all twelve correctly. The
+# accurate statement is narrower and more useful:
+#
+#   NO SINGLE STATIC PAIR-COUNT THRESHOLD IS SAFE ON BOTH MACHINES, because the problem that
+#   breaks it changes verdict between them. A gate tuned on either machine alone would be wrong
+#   on the other, near the boundary.
+#
+# That is exactly why this is not being shipped. It is also a more encouraging result than the
+# M1-only reading: the shipped gate is wrong only NEAR THE BOUNDARY, and every problem far from it
+# is classified identically on both machines. A future gate needs a work estimate rather than a
+# pair count, and needs more than two machines to place its boundary.

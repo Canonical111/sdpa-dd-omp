@@ -1,0 +1,31 @@
+# EVERY dE4 AND dE3 RUN OF THE RELEASED BINARY ON pi, WITH ITS ASSEMBLY-STREAM HASH.
+#
+# This file exists to make one sentence checkable: "the race did fire on dE4, rarely". That claim
+# was previously supported by prose referring to runs that were not archived, which is exactly the
+# provenance gap the .meta policy is meant to close.
+#
+# HOST: pi -- i9-13900K, 24 physical cores, Ubuntu, gcc.
+# BUILD: v7.1.3-omp.2 (tag 043910f), rebuilt on pi from its own installer -- the RACING code.
+# COLLECTED FROM THREE SEPARATE RUN SETS, hours apart, each with its own purpose:
+#   pi_race    the first determinism probe: 3 auto + 3 sparse at 24 threads, plus a 1-thread
+#              reference for each mode. Parameter file: benchkit param_de.sdpa, maxIteration 4.
+#   pi_fixed   6 auto at 24 threads, the racing arm of the plain-barrier comparison.
+#   pi_cond    5 auto at 24 threads, the racing arm of the conditional-barrier comparison.
+# asm_sha is sha256 of the assembly stream (SDPA_BMAT_ASM_DUMP), first 16 hex characters. The dump
+# file is opened in APPEND mode, so it is removed before each run; a harness that forgets this
+# reports every run as different.
+#
+# THE TALLY, and it is the whole point of the file:
+#
+#   dE4, 24 threads, released binary:  17 runs, 16 with stream c9b8d6e574e26495,
+#                                      1 with 027af3f6daf1d0cf  (pi_race, sparse, run 1)
+#   both 1-thread references:          c9b8d6e574e26495
+#   dE3:                               one stream per mode across every run
+#
+# So the race fires on dE4 about once in seventeen threaded runs, and when it fired the printed
+# objective did not move -- 1.9802618586396243e+03 in every row. That is why a single-run
+# stream comparison, which is what the original oracle did, passed.
+#
+# It also means the DEFAULT route of the headline problem was affected. The published figures
+# stand because the protocol behind them was re-run on the fixed tree
+# (dd_final_headline_postfix.tsv), not because dE4 was ever immune.

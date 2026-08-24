@@ -653,10 +653,6 @@ DenseMatrix::DenseMatrix(int nRow, int nCol, DenseMatrix::Type type) {
 
 DenseMatrix::~DenseMatrix() { terminate(); }
 
-#ifdef SDPA_PROBE_ALLOC_COUNT
-unsigned long long g_probe_dense_allocs = 0ULL;
-#endif
-
 void DenseMatrix::initialize(int nRow, int nCol, DenseMatrix::Type type) {
     // rMessage("DenseMatrix::initialize");
 
@@ -686,14 +682,6 @@ void DenseMatrix::initialize(int nRow, int nCol, DenseMatrix::Type type) {
         }
         if (de_ele == NULL) {
             rNewCheck();
-#ifdef SDPA_PROBE_ALLOC_COUNT
-            /* PROBE ONLY, and on its OWN flag so it can be built with AND without the
-               no-reallocation path. Without that separation, "removing reallocation changed
-               nothing" is equally consistent with a probe that removed no reallocations -- the
-               same vacuity trap this fork has hit repeatedly. */
-            extern unsigned long long g_probe_dense_allocs;
-            ++g_probe_dense_allocs;
-#endif
             de_ele = new dd_real[length];
             if (de_ele == NULL) {
                 rError("DenseMatrix:: memory exhausted");

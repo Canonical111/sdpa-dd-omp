@@ -9,7 +9,7 @@ Fork of [nakatamaho/sdpa-dd](https://github.com/nakatamaho/sdpa-dd) at commit
 reproducibility regressions. **Build it:** [INSTALL.md](INSTALL.md). The issues were reported to the upstream maintainer and have not
 been adopted there; this fork exists so the fixes are usable.
 
-## What changed (4 commits on top of upstream)
+## The original four-patch port
 
 | commit | change |
 |---|---|
@@ -57,7 +57,7 @@ themselves rather than the printed solution. Every runtime knob is documented in
 [RUNTIME.md](RUNTIME.md).
 
 These are fixed-budget comparisons, not time-to-convergence results. Raw rows and full provenance:
-`review/artifacts/dd-port3-2026-08-23/dd_final_headline_postfix.tsv`.
+[bench/dd-port3-2026-08-24/dd_final_headline_postfix.tsv](bench/dd-port3-2026-08-24/dd_final_headline_postfix.tsv).
 
 > **Do not use `v7.1.3-omp.2`.** It contains a data race in the threaded assembly: on a problem
 > whose **sparse assembly is threaded** *and* whose SDP blocks share Schur-complement entries —
@@ -74,19 +74,46 @@ regenerated tables.
 Every modified or added source file carries an in-file, dated change notice naming its own
 licence: GPLv2 §2a for the SDPA sources, and the 2-clause BSD terms for `mplapack/`, which
 carries no GNU licence at all. The
-complete, always-current list is `git diff --stat <upstream-base>..HEAD` — an enumeration
-here went stale twice and is deliberately not repeated. `git log` has the rationale per
-change.
+complete, always-current list is a diff against upstream — an enumeration here went stale twice
+and is deliberately not repeated. `git log` has the rationale per change.
+
+The upstream base commit is not an ancestor of this repository's history, so fetch it first; this
+works from a fresh clone:
+
+```bash
+git remote add upstream https://github.com/nakatamaho/sdpa-dd.git
+git fetch --depth=1 upstream 6eaad8d9abff929bf8abc55ea166cbb2b09d07df
+git diff --stat 6eaad8d9abff929bf8abc55ea166cbb2b09d07df..HEAD
+```
 
 ## Measured results
 
 20 SDPLIB problems (m = 21…1106), external wall clock, median of 3 pinned repeats:
+
+<details>
+<summary><b>Historical: the 2026-08-02 release campaign — superseded, click to expand</b></summary>
+
+These are the numbers from the first release campaign, before the threading and FP-contraction
+work. They are kept for the record and are **not** current; the current figures are below and in
+[BENCHMARKS.md](BENCHMARKS.md).
 
 | | EPYC 7232P (8 cores) | i9-13900K (24 cores) | M1 Max (8P+2E) |
 |---|---|---|---|
 | sdpa-dd 7.1.2 (2009) | 1107.3 s | 309.6 s | 360.0 s |
 | upstream master, threaded | 537.8 s | 136.7 s | 112.4 s |
 | **this fork** (2026-08-02 campaign) | **292.0 s** | **58.8 s** | **86.0 s** |
+| vs upstream master (end-to-end) | **1.84×** | **2.33×** | **1.31×** |
+
+Serial upstream and optimized trajectories matched on 20/20 problems, on all three machines, in
+that campaign (pre-contraction-pin).
+
+</details>
+
+**Current, on the same 20-problem set.** The M1 Max column above reads 86.0 s; that same column is
+now **44.9 s**, and the headline is quoted **per iteration** — **7.78× against sdpa-dd 7.1.2** —
+because the FP-contraction pin changed iteration counts on 12 of the 20 problems, and a wall-clock
+ratio across differing iteration counts mixes speed with path length. Per-machine detail, with the
+trajectory qualifications, is in [BENCHMARKS.md](BENCHMARKS.md).
 
 **On the large sparse problems the gap is much wider, because upstream's threading does not
 reach them at all.**
@@ -109,15 +136,6 @@ Upstream also scales **negatively** on small problems — 11× slower on `contro
 on `truss5` at 24 threads than at 1 — where this fork's work gating keeps `control1` flat to four
 decimal places. Full curves in [BENCHMARKS.md](BENCHMARKS.md).
 
-> The table above is the ORIGINAL release campaign, kept as history. The current
-> tables live in [BENCHMARKS.md](BENCHMARKS.md), regenerated 2026-08-07 after the
-> threading and contraction work: the same optimized8 column now totals 44.9 s and
-> the headline is quoted PER ITERATION (7.78x vs v712), because the contraction pin
-> changed trajectories on 9 of 20 problems and a wall ratio across different
-> iteration counts mixes speed with path length.
-| vs upstream master (end-to-end) | **1.84×** | **2.33×** | **1.31×** |
-
-Serial upstream and optimized trajectories matched on 20/20 problems, on all three machines, in that campaign (pre-contraction-pin; see BENCHMARKS.md for the current comparison).
 **Threaded upstream is nondeterministic** (e.g. `control1` across three repeats: 69/74/88
 iterations at 24 threads on the i9, 69/82/109 at 8 threads on the EPYC; this fork: 71/71/71
 on both), so the vs-upstream figures are observed end-to-end speedups rather than strictly

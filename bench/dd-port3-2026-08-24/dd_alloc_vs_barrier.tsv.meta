@@ -1,0 +1,58 @@
+# PHASE 4: is the threaded assembly's small-block loss ALLOCATION or BARRIERS?
+#
+# WHY. DenseMatrix::initialize frees and reallocates whenever nRow*nCol differs from the previous
+# dimensions, so the per-worker scratch is reallocated once per block per worker per iteration on
+# a problem whose blocks differ in size. That cost sat confounded with the barrier's in the
+# truss6 loss, and a gate recalibrated (Phase 5) from a confounded measurement would be worthless.
+#
+# HOW, and what the round-6 review required. The probe RESERVES capacity at max_dim and reuses it
+# while keeping each block's LOGICAL dimensions and zeroing exactly the region the shipped path
+# zeroes. It does NOT pad the computation to max_dim -- that would change the flop count and
+# memory traffic and would measure the padding instead of the allocation. The matrices are
+# column-major with leading dimension nRow, so the live region is exactly [0, nRow*nCol) and a
+# larger buffer beyond it is never touched.
+#
+# THE PROBE IS SHOWN TO DO SOMETHING, on its own compile flag so it can be built with and without
+# the reuse path (SDPA_PROBE_ALLOC_COUNT counts real allocations; SDPA_PROBE_NOREALLOC enables the
+# reuse). Without that separation, "removing reallocation changed nothing" would be equally
+# consistent with a probe that removed no reallocations.
+#
+# PRECONDITION CHECKED FIRST: the probe build and the shipped build produce BYTE-IDENTICAL
+# assembly streams on all eight problems (truss6, 10_min, crossblock, spchol_fix, 8_min, arch0,
+# 12_min, gpp100). A probe that changes the answer measures nothing.
+#
+# HOST: CANONICAL111 -- Apple M1 Max, 10 physical cores, aarch64, macOS, g++-16. A working
+#       laptop; the serial-vs-parallel and shipped-vs-probe RATIOS are the figure of merit, not
+#       the absolute seconds. SDPA_BMAT_MODE=sparse, assembly forced both ways,
+#       SDPA_BMAT_ASM_PROFILE=1 for the `asm SDP` sub-phase, 3 repeats, medians.
+#
+# ---- RESULT ----
+#
+#   problem     blk sizes   allocs shipped -> probe        asm shipped -> probe
+#   12_min      14          8665 -> 748     (-91%)         3.5604 -> 3.5507  (-0.3%)
+#   10_min       9          5166 -> 587     (-89%)         0.0601 -> 0.0606  (+0.7%)
+#   8_min        6          4079 -> 553     (-86%)         0.0180 -> 0.0175  (-3.1%)
+#   control1     2          2946 -> 1477    (-50%)         0.0183 -> 0.0177  (-3.0%)
+#   arch0        2          1319 -> 1308    ( -1%)         0.6413 -> 0.6437  (+0.4%)
+#   truss6       2          3129 -> 3124    ( -0%)         0.7404 -> 0.7435  (+0.4%)
+#   spchol_fix   1          1114 -> 1119    (  0%)         0.0080 -> 0.0080  ( 0.0%)
+#   crossblock   1           377 -> 377     (  0%)         0.0093 -> 0.0097  (+4.1%)
+#
+# CONCLUSION: allocation is NOT a material component. Where the probe removes 86-91% of every
+# DenseMatrix allocation in the process, the threaded assembly moves by at most 3.1%, and by 0.3%
+# on the largest reduction of all. The +0.4%/+4.1% entries are noise on cells of a few
+# milliseconds.
+#
+# AND truss6 -- the loss case that prompted the whole question -- turns out to be 150 blocks of
+# order 3 plus a single block of order 1. Consecutive blocks almost always have the SAME area, so
+# initialize() takes its no-reallocation path and there is nothing there to remove. Its 19.6x
+# assembly loss against serial is barriers and thread overhead, full stop.
+#
+# PHASE 5 IS THEREFORE UNBLOCKED: the small-block loss is not confounded by allocation, and a
+# gate recalibration can attribute it to synchronisation.
+#
+# HARNESS NOTE, recorded because the first version of this table was WRONG. It did not remove the
+# solver output files before each run, so a failed run silently reported the PREVIOUS problem's
+# numbers -- the arch0 row duplicated 12_min's to six digits, and 12_min appeared to gain 22% from
+# the probe rather than 0.3%. Same family as the append-mode dump bug found earlier in this
+# campaign. The corrected harness removes every output first and rejects an unreadable one.

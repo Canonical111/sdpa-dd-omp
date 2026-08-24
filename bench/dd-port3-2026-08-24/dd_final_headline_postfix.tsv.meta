@@ -1,0 +1,62 @@
+# THE ORIGINAL HEADLINE PROTOCOL, RE-RUN ON THE FIXED TIP.
+#
+# Round 4 of review pointed out -- correctly -- that dd_pi_racefix.tsv uses a DIFFERENT parameter
+# file from the one behind the published 6.45 s / 4.49 s figures, and therefore supports "the fix
+# cost nothing in a matched experiment" but not "the headline figures were re-measured". This file
+# closes that properly: it is the same protocol, rerun.
+#
+# IDENTICAL TO THE PHASE-7 RUN THAT PRODUCED ../dd-port2-2026-08-23/dd_final_headline.tsv:
+#   HOST      pi -- i9-13900K, 24 physical cores, Ubuntu, gcc
+#   PINNING   OMP_PROC_BIND=true OMP_PLACES=cores OMP_MAX_ACTIVE_LEVELS=1,
+#             OMP_NUM_THREADS=24, taskset -c 0-23
+#   PARAM     the fork's OWN shipped param.sdpa with maxIteration forced to 4
+#             (sed "s/^200\(.*maxIteration\)/4\1/"), NOT benchkit's param_de.sdpa
+#   SETTINGS  DEFAULT -- no forced modes; the dE3 `fill` cell sets SDPA_BMAT_MODE=fill and
+#             nothing else
+#   RSS       /usr/bin/time -v "Maximum resident set size", 3 repeats, medians below
+# BUILD: main at 20fa6c1, cloned fresh and built by its own recipe.
+#
+# ROUTE AND OVERLAP POLICY, logged in the same run:
+#   dE4 auto   gate4 fill=13364097 -> SPARSE    blocks_disjoint=0  overlap=barrier
+#   dE3 auto   gate3 aggregate=9443183 cutoff=9.20212e+06 -> DENSE
+#   dE3 fill   gate4 fill=9551057  -> SPARSE    blocks_disjoint=0  overlap=barrier
+# Both sparse cells take the BARRIER arm, so these medians are the barrier's real price.
+#
+# MEDIANS, against the pre-fix run of the same protocol:
+#
+#   cell        time before   time after    d       RSS before   RSS after    d
+#   dE4 auto      6.452 s       6.495 s   +0.7%      382.2 MB     406.0 MB   +6.2%
+#   dE3 auto     22.734 s      22.595 s   -0.6%      670.7 MB     670.9 MB   +0.0%
+#   dE3 fill      4.491 s       4.592 s   +2.2%      277.5 MB     294.5 MB   +6.1%
+#
+# TIME: all three inside the +/-3% band this campaign treats as noise. The published 7.18x and
+# 5.00x become 7.17x and 4.92x on these medians.
+#
+# MEMORY IS THE REAL COST, and it was invisible to the matched-parameter experiment because that
+# one did not record RSS. The +6% on both SPARSE-route cells is the pass at the end of
+# make_aggrigateIndex_SDP that decides whether two blocks may overlap: it holds one int per stored
+# sparse_bMat element. dE3's dense cell does not reach that pass and does not move, which is the
+# control that identifies the cause.
+#
+# The dE3 auto-vs-fill memory ratio therefore falls from 2.42x to 2.28x, and the shipped docs now
+# say 294 MB against 671 MB rather than 277 MB against 670 MB.
+#
+# NOT DONE, recorded as open: the stamp array could be a bitset plus a per-block dedupe instead of
+# one int per element, which would cut it by roughly 30x. That is an optimisation inside a
+# correctness-critical pass, and it is not being attempted in a correctness release.
+
+# ============================================================================================
+# ERRATUM, 2026-08-24 (benchmark/README audit, round 6)
+#
+# The line above computing "7.18x -> 7.17x" for dE4 uses the WRONG BASELINE ROW. It divides the
+# current 24-thread median into the historical unmodified fork's ONE-THREAD median (46.587285 s)
+# rather than its 24-thread median (46.329404 s) under the same protocol. Both rows are in
+# ../dd-port-2026-08-23/dd_raw_rows.tsv.
+#
+#   same-protocol, 24 threads:  46.329404 / 6.495325 = 7.1327   <- the supported figure
+#   the mixed comparison:       46.587285 / 6.495325 = 7.1724   <- what was published, wrong
+#
+# The published headline is now 7.13x. The measured rows in this file are unaffected -- only the
+# ratio derived from them was wrong. A genuine within-v7.1.3-omp.3 1-to-24-thread scaling figure
+# is a separate measurement (dd_v3_scaling_1t_24t.tsv) and answers a different question.
+# ============================================================================================

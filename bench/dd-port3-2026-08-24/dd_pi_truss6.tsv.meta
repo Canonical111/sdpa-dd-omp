@@ -1,0 +1,19 @@
+# THE DEFECT, REPRODUCED ON A SECOND ARCHITECTURE.
+#
+# SDPLIB truss6.dat-s at DEFAULT SETTINGS, no environment variables, ~/benchkit/param_sdplib.sdpa.
+# HOST: pi -- i9-13900K, 24 cores, x86-64, Ubuntu, gcc. The macOS/aarch64 reproduction is in
+#       dd_race_truss6.tsv; this is the same defect on the other machine and the other ISA, so it
+#       is not a toolchain artefact.
+#
+#   dd_race (v7.1.3-omp.2)   5 runs -> FOUR distinct objectives, all wrong:
+#                            3.9521499916550376e+04, 3.6353612816197647e+03,
+#                            3.9522422936534203e+04, 1.0821458315017234e+05,
+#                            3.9521633104401415e+04
+#   dd_cond (fixed)          5 runs -> -9.0100140477088098e+02 every time
+#
+# The correct objective is -9.0100140477088098e+02. Note that three of the five wrong values
+# agree to four significant digits with each other -- a run-to-run spread test with a loose
+# tolerance and a small sample could call that stable.
+#
+# arch0 rows are the control: two blocks, no shared entries, deterministic on BOTH builds. A file
+# in which everything varied would not distinguish a race from a broken harness.

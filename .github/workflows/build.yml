@@ -1030,6 +1030,12 @@ jobs:
           # copy and require its rule to fire. The first version of the tolerance rule was dead
           # -- it allowed one asterisk where the document had two -- and this is what found it.
           bash tests/check_doc_claims.sh --self-test
+          # Every relative link in the maintained documents must resolve in a FRESH CLONE. Five
+          # benchmark citations once pointed at review/artifacts/, which exists only in the private
+          # evidence repository, so no reader could follow the provenance the documents promised.
+          bash tests/check_links.sh
+          # And the published rows must still yield the published figures.
+          python3 bench/validate.py
       - name: overflow guards -- the production helpers, at their boundaries
         run: |
           set -e

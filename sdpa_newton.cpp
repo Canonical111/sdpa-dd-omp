@@ -1914,35 +1914,6 @@ void Newton::census_bMat_sparse_SDP(InputData &inputData, FILE *fp) {
 
    Blocks are processed collectively: every thread walks the same block sequence so the
    worksharing constructs are encountered by all of them in the same order. See git log. */
-#ifdef SDPA_PROBE_NOREALLOC
-/* PROBE ONLY. Resize a private scratch matrix within capacity already held, without freeing or
-   reallocating, zeroing exactly the logical region the shipped path zeroes.
-
-   Exists to answer one question Phase 4 of the plan asks: on problems with many differently
-   shaped blocks, how much of the threaded assembly's loss is the BARRIER and how much is
-   DenseMatrix::initialize reallocating once per block per worker per iteration? Those two costs
-   are currently confounded, and a gate recalibrated from a confounded measurement would be
-   worthless.
-
-   Falls back to initialize() if the capacity is somehow insufficient, so the probe can never
-   silently read past the buffer. */
-static void probe_resize_reusing(DenseMatrix &m, int nRow, int nCol, DenseMatrix::Type type,
-                                 int cap_dim) {
-    const long long want = (long long)nRow * (long long)nCol;
-    const long long have = (long long)cap_dim * (long long)cap_dim;
-    if (m.de_ele == NULL || type != DenseMatrix::DENSE || want > have) {
-        m.initialize(nRow, nCol, type);
-        return;
-    }
-    m.nRow = nRow;
-    m.nCol = nCol;
-    m.type = type;
-    for (long long k = 0; k < want; ++k) {
-        m.de_ele[k] = 0.0;
-    }
-}
-#endif
-
 /* One i-group's contribution to the Schur complement, in one place.
 
    Extracted when the assembly grew two worksharing forms -- with and without `nowait` -- so
@@ -2067,24 +2038,8 @@ bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &c
             // reallocates at all (3129 -> 3124). Allocation is therefore NOT a material part of
             // the small-block loss; the barrier and thread overhead are essentially all of it.
             if (owns_priv) {
-#ifdef SDPA_PROBE_NOREALLOC
-                /* MEASUREMENT PROBE, never in a release build (-DSDPA_PROBE_NOREALLOC).
-                   Reuses the capacity already reserved at max_dim instead of reallocating, while
-                   keeping this block's LOGICAL dimensions and zeroing exactly the same region the
-                   shipped path zeroes.
-
-                   It must not become a padding probe. The matrices are column-major with leading
-                   dimension nRow -- every kernel indexes de_ele[row + nRow*col] -- so the live
-                   region is exactly [0, nRow*nCol) and a larger buffer beyond it is never read
-                   or written. Same arithmetic, same memory traffic, same results; the only thing
-                   removed is the allocator call. Padding the COMPUTATION to max_dim would change
-                   the flop count and would measure the padding, not the allocation. */
-                probe_resize_reusing(priv1, shared1.nRow, shared1.nCol, shared1.type, max_dim);
-                probe_resize_reusing(priv2, shared2.nRow, shared2.nCol, shared2.type, max_dim);
-#else
                 priv1.initialize(shared1.nRow, shared1.nCol, shared1.type);
                 priv2.initialize(shared2.nRow, shared2.nCol, shared2.type);
-#endif
             }
             DenseMatrix &work1 = owns_priv ? priv1 : shared1;
             DenseMatrix &work2 = owns_priv ? priv2 : shared2;
@@ -2166,12 +2121,6 @@ bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &c
         }
     }
     if (bmat_asm_log()) {
-#ifdef SDPA_PROBE_ALLOC_COUNT
-        {
-            extern unsigned long long g_probe_dense_allocs;
-            rMessage("bmat asm probe: dense_allocs_so_far=" << g_probe_dense_allocs);
-        }
-#endif
         rMessage("bmat asm: team=" << actual_team << " groups=" << total_groups
                                    << " groups_executed=" << groups_done
                                    << " blocks_disjoint=" << (SDP_blocks_disjoint ? 1 : 0)

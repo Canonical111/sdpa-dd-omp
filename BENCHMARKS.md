@@ -25,7 +25,7 @@ use external wall time and the corrected clock.
 
 Median of 3 repeats, seconds (`wall_s`). Spread = (max-min)/median.
 
-## Thread scaling against upstream — 2026-08-23
+## Thread scaling against upstream — 2026-08-24
 
 Upstream `nakatamaho/sdpa-dd` at **`6eaad8d`**, the exact commit this fork branched from and still
 its `master`, rebuilt from its own recipe with `--enable-openmp=yes`. Same pinning, same
@@ -36,7 +36,7 @@ nothing else.
 
 `main loop time` over a fixed 4-iteration budget, **medians of 3**, both builds `v7.1.3-omp.3` and
 upstream `6eaad8d` interleaved cell by cell. Raw rows and provenance:
-`review/artifacts/dd-port3-2026-08-23/dd_upstream_vs_v3.tsv`.
+[bench/dd-port3-2026-08-24/dd_upstream_vs_v3.tsv](bench/dd-port3-2026-08-24/dd_upstream_vs_v3.tsv).
 
 | `dE4` (m=7401, routes **sparse**) | 1 | 2 | 4 | 8 | 16 | 24 | 1→24 |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -127,7 +127,7 @@ a last-bit change in the parsed `dd_real` amplified over 43 iterations looks lik
 input is the same problem to within one ulp of dd precision, and a one-ulp input change cannot
 turn a NaN into a correct solve: **token length is the cause.**
 
-Raw rows: `review/artifacts/dd-port3-2026-08-23/dd_token_length.tsv`, with the truncation script
+Raw rows: [bench/dd-port3-2026-08-24/dd_token_length.tsv](bench/dd-port3-2026-08-24/dd_token_length.tsv), with the truncation script
 beside it.
 
 This is the defect fixed by the reader work already in this fork, and the measurement above is an
