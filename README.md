@@ -68,6 +68,21 @@ These are fixed-budget comparisons, not time-to-convergence results. Raw rows an
 > (commit `e660d19`; archive sha256 `290a038e…`). The check that catches the defect is in
 > [INSTALL.md](INSTALL.md#the-property-worth-checking-yourself) and in CI.
 
+> ### These documents describe `main`, which is ahead of the latest release
+>
+> `v7.1.3-omp.3` is the newest tagged release and is **correct** — it has the race fix. `main`
+> carries one further change to solver code (`sdpa_newton.cpp`, +37/−12): the map that decides
+> whether two blocks may overlap now uses **two bits** per Schur entry instead of one `int`.
+>
+> The only user-visible difference is **peak memory on sparse-route problems**: `dE4` is 382.0 MB
+> on `main` against 405.8 MB in `v7.1.3-omp.3`, and `dE3` via `fill` 277.5 MB against 294.2 MB.
+> Answers, routes and timings are unchanged. Wherever this README or `INSTALL.md` quotes a memory
+> figure, it is `main`'s.
+>
+> If you want exactly what the documents describe, build from `main`; if you want a tagged
+> release, take `v7.1.3-omp.3` and expect about 6% more peak RSS on those problems. A
+> `v7.1.3-omp.4` tag is deliberately deferred pending review.
+
 Each change carries its evidence in its commit message; [BENCHMARKS.md](BENCHMARKS.md) holds the
 regenerated tables.
 

@@ -137,6 +137,10 @@ since the setup pass that decides whether two blocks may overlap was reduced fro
 **two bits** per stored Schur entry — **nothing measurable in memory**: `dE4` is 382.0 MB against
 382.2 MB before the fix, and `dE3`-via-`fill` 277.5 MB against 277.5 MB.
 
+> **Those two memory figures are `main`'s, not the latest release's.** The two-bit map is not in
+> `v7.1.3-omp.3`, which holds one `int` per Schur entry and uses 405.8 MB and 294.2 MB on the same
+> two cells — about 6% more. Everything else here, including every timing, applies to both.
+
 Neither problem converged at double-double precision under **either of the two tolerance settings
 tested** — the shipped `epsilonStar=1e-30` and a relaxed `1e-20`. These runs therefore compare a
 fixed four-iteration computation budget rather than time to convergence; a looser parameter choice

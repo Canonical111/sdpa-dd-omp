@@ -96,6 +96,20 @@ for f in README.md INSTALL.md BENCHMARKS.md; do
   fi
 done
 
+# --- 7. main is ahead of the latest release: say so wherever a main-only figure is quoted -------
+# The two-bit overlap map is on main and NOT in v7.1.3-omp.3, so the memory figures in these
+# documents describe something a reader cannot download. A v7.1.3-omp.4 tag is deferred pending
+# review, and until it exists the divergence must be stated rather than left for the reader to
+# discover. When v.4 IS cut, this rule should be deleted along with the notices it guards.
+if current_claims INSTALL.md | grep -qE '382\.0 MB|277\.5 MB'; then
+  grep -qF "not the latest release" INSTALL.md \
+    || bad "INSTALL.md quotes main-only memory figures without saying they are not in the release"
+fi
+if grep -qE 'v7\.1\.3-omp\.3' README.md; then
+  grep -qE 'These documents describe .main., which is ahead of the latest release' README.md \
+    || bad "README.md points at the release without noting that main is ahead of it"
+fi
+
 if [ "${1:-}" != "--self-test" ]; then
   if [ "$fail" -eq 0 ]; then
     note ok "documentation claims match the archived evidence"
@@ -145,6 +159,8 @@ probe "upstream table stops naming build"   BENCHMARKS.md 's/both builds `v7.1.3
 # memory ratio that legitimately changes when the memory is re-measured. (The previous probe was
 # tied to "2.3× less" and went dead the moment that became 2.4×.)
 probe "dE3-fill quoted to 3 sig figs"       INSTALL.md   's/about 5× faster/4.92× faster/'
+probe "main-ahead notice dropped (INSTALL)" INSTALL.md   's/not the latest release/not the newest thing/'
+probe "main-ahead notice dropped (README)"  README.md    's/These documents describe `main`, which is ahead of the latest release/Current figures/'
 
 echo
 if [ "$dead" -eq 0 ]; then
