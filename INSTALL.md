@@ -58,17 +58,34 @@ difference and is covered by the FP-contraction pin described in the README.
 ### The property worth checking yourself
 
 This fork guarantees **bit-identical results at any thread count**. That is a real, testable
-claim:
+claim — but `example1` cannot test it. It is m=10, so it routes dense, never reaches the threaded
+Cholesky or the threaded assembly, and would print the same answer on a build with no threading
+at all. Use a problem that actually threads:
 
 ```bash
+python3 tests/gen_crossblock_fixture.py > xb.dat-s      # m=480, routes sparse, threads
 for t in 1 4 8; do
-  OMP_NUM_THREADS=$t ./sdpa_dd -ds example1.dat-s -o t$t.result -p param.sdpa
+  OMP_NUM_THREADS=$t ./sdpa_dd -ds xb.dat-s -o t$t.result -p param.sdpa
 done
 diff <(grep -E 'objValPrimal|objValDual|phase.value|Iteration =' t1.result) \
      <(grep -E 'objValPrimal|objValDual|phase.value|Iteration =' t8.result)
 ```
 
-No output means the guarantee holds on your build. **Two settings deliberately change results and
+**And run it twice at the SAME thread count**, which is the check that matters most:
+
+```bash
+for r in 1 2 3 4 5; do
+  ./sdpa_dd -ds xb.dat-s -o r$r.result -p param.sdpa >/dev/null
+  grep -h '^objValPrimal' r$r.result
+done | sort -u | wc -l          # must print 1
+```
+
+That second form is not belt-and-braces. `v7.1.3-omp.2` contained a data race in the threaded
+assembly that produced a different answer on nearly every run; comparing thread counts would not
+have caught it, because both sides of the comparison were wrong in different ways. It is fixed,
+and both forms above are in CI.
+
+No output from the `diff`, and `1` from the second, means the guarantee holds on your build. **Two settings deliberately change results and
 must not be varied during this check:** `SDPA_BMAT_MODE` (a different factorisation route) and
 `SDPA_SPCHOL_MODE=force` only insofar as it changes *which* pivots thread — the factor itself stays
 bit-identical, but leave both unset for a clean comparison.

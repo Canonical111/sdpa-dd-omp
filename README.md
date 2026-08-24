@@ -47,9 +47,15 @@ described below.
 Since then the two remaining serial regions on the large-sparse path have been threaded: the
 **sparse Schur-complement Cholesky** and the **sparse Schur-complement assembly**. Together they
 take dE4 (m=7401) from 46.6 s to **6.5 s at default settings**, a **7.2×** whole-solver speedup on
-24 cores, with the factor and the assembled matrix both **bit-identical at any thread count** —
-verified by comparing the structures themselves, not the printed solution. Every runtime knob is
-documented in [RUNTIME.md](RUNTIME.md).
+24 cores, with the factor and the assembled matrix both **bit-identical at any thread count, and
+across repeated runs at one thread count** — verified by comparing the structures themselves, not
+the printed solution. Every runtime knob is documented in [RUNTIME.md](RUNTIME.md).
+
+> **If you are running `v7.1.3-omp.2`, upgrade.** It contains a data race in the threaded
+> assembly: on a problem whose route is sparse *and* whose blocks share Schur-complement entries
+> — SDPLIB `truss6` among them, at default settings — it returns a different answer on nearly
+> every run. Fixed in `v7.1.3-omp.3`; the check that catches it is in
+> [INSTALL.md](INSTALL.md#the-property-worth-checking-yourself) and in CI.
 
 Each change carries its evidence in its commit message; [BENCHMARKS.md](BENCHMARKS.md) holds the
 regenerated tables.
