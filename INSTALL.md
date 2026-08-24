@@ -150,9 +150,32 @@ treated as `auto`.
 
 **`fill` is opt-in and can be a large win on large sparse problems.** On dE3 it takes the route
 `auto` declines: **4.5 s against 22.6 s, and 277 MB against 671 MB** — about 5× faster on 2.4× less
-memory. It is not the default because the timings behind that decision cover two problem
-structures so far, not the seven the route census identifies. `SDPA_BMAT_LOG=1` prints which gate
-decided and why.
+memory. `SDPA_BMAT_LOG=1` prints which gate decided and why.
+
+That is not one lucky problem. A route census identified **seven distinct structures** on which the
+two policies disagree, covering all 167 affected instances, and `fill` has now been measured on
+**every one of them**:
+
+| m | `auto` (dense) | `fill` (sparse) | faster | less memory |
+|---:|---:|---:|---:|---:|
+| 2,439 | 1.92 s / 116 MB | 0.61 s / 50 MB | 3.17× | 2.30× |
+| 4,489 | 9.22 s / 392 MB | 3.59 s / 213 MB | 2.57× | 1.84× |
+| 5,278 | 14.50 s / 519 MB | 3.88 s / 234 MB | 3.74× | 2.22× |
+| 6,067 | 22.97 s / 671 MB | 4.50 s / 277 MB | 5.11× | 2.42× |
+| 8,359 | 66.20 s / 1,289 MB | 15.13 s / 587 MB | 4.38× | 2.20× |
+| 10,614 | 150.47 s / 2,032 MB | 22.36 s / 831 MB | 6.73× | 2.45× |
+| 11,227 | 175.81 s / 2,358 MB | 47.94 s / 1,183 MB | 3.67× | 1.99× |
+
+**It remains opt-in anyway, and the reason is worth understanding before you set it.**
+`SDPA_BMAT_MODE` is *result-changing*: dense and sparse are different factorisation routes and
+follow different iterate trajectories. The figures above are per-iteration costs over a fixed
+four-iteration budget, so they cannot tell you whether the two routes need the same *number* of
+iterations to reach a tolerance — and these instances do not converge at double-double precision
+under the tolerances tested, so no time-to-solution comparison exists to quote. What is established
+is that on per-iteration cost and peak memory, `fill` dominates on every structure that
+distinguishes the policies.
+
+Raw rows: `review/artifacts/dd-port3-2026-08-23/dd_fill_seven_structures.tsv`.
 
 `SDPA_BMAT_MAX_GB` caps the dense allocation and is enforced on every route to dense, so a problem
 that would silently need more memory than you have fails with a number instead.
