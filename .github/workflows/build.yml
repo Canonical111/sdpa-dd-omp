@@ -1440,11 +1440,14 @@ jobs:
           make clean >/dev/null 2>&1 || true
           ./configure --enable-openmp=yes >/dev/null
           make -j"$(nproc)" >/dev/null
-      - name: auto must be unchanged by the mode switch
+      - name: unset and an explicit auto must select the same policy
         run: |
           set -e
-          # An unset SDPA_BMAT_MODE and an explicit auto must agree exactly: the per-mode cutoffs
-          # are ternaries whose auto arm is the released expression, and this is what checks it.
+          # Exactly what it says, and no more. It does NOT assert that auto is the released
+          # expression -- that stopped being true when the fill-derived policy became the default
+          # on 2026-08-24, and the step's old name ("auto must be unchanged by the mode switch")
+          # claimed otherwise. The routes themselves are pinned by the route-boundary battery,
+          # which compares `legacy` against `auto` on a divergent fixture.
           ./sdpa_dd -ds example1.dat-s -o /tmp/u -p param.sdpa >/dev/null 2>&1
           SDPA_BMAT_MODE=auto ./sdpa_dd -ds example1.dat-s -o /tmp/a -p param.sdpa >/dev/null 2>&1
           diff <(grep -aE "objValPrimal|objValDual|Iteration|phase" /tmp/u) \

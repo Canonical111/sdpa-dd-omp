@@ -363,9 +363,11 @@ int Chordal::Spooles_MS(int m) {
     return nonzeros * 2 - m;
 }
 
-/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23: adds SDPA_BMAT_MODE, an explicit and
-   strictly-parsed route selector, and decouples gate 2 from gate 3's constant under the opt-in
-   `fill` policy. Ported from sdpa-gmp-omp; see review/GATE3-DECISION-RULE-FINAL-REPORT.md and
+/* MODIFIED from upstream (GPLv2 2a notice), 2026-08-23, revised 2026-08-24: adds SDPA_BMAT_MODE,
+   an explicit and strictly-parsed route selector, and decouples gate 2 from gate 3's constant.
+   The fill-derived policy was opt-in when this was first written; it is now the DEFAULT, with
+   SDPA_BMAT_MODE=legacy restoring the previous chooser -- see the block below. Ported from
+   sdpa-gmp-omp; see review/GATE3-DECISION-RULE-FINAL-REPORT.md and
    review/DD-PORT-PLAN-2026-08-23.md in the recipe repo.
 
    THE DEFAULT IS THE FILL-DERIVED POLICY (2026-08-24). Gate 2 keeps a frozen cutoff of 0.5*m

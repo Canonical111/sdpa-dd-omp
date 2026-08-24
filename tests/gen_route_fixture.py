@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Emit small problems that sit ON the bMat route-chooser's boundaries.
 
-Finding L. The chooser has four gates and two policies (`auto`, the released 0.25 aggregate
-policy, and `fill`, the opt-in 0.40 fill-derived one), and until now the only route assertion in
-CI compared example1's PRINTED OUTPUT between unset and `auto`. That cannot detect a silent
-promotion of `fill` to the default, because on a problem where both routes reach the same answer
-the output is identical by design. The route itself has to be the thing asserted, and it is
-observable: SDPA_BMAT_LOG=1 prints `bmat: gateN ... -> DENSE|SPARSE`.
+Finding L. The chooser has four gates and two policies. Since 2026-08-24 the DEFAULT is the
+0.40 fill-derived policy -- selected by unset, `auto` or `fill`, which are synonyms -- and
+`legacy` is the released 0.25 aggregate policy. (When this file was written the polarity was the
+other way round: `auto` was 0.25 and `fill` was the opt-in one.)
+
+Until this fixture existed, the only route assertion in CI compared example1's PRINTED OUTPUT
+between unset and `auto`. That cannot detect a policy being switched underneath the default,
+because on a problem where both routes reach the same answer the output is identical by design.
+The route itself has to be the thing asserted, and it is observable: SDPA_BMAT_LOG=1 prints
+`bmat: gateN ... -> DENSE|SPARSE`.
 
 Cases, chosen so each one straddles a gate rather than sitting comfortably inside it. The gate
 comparisons are strict `>`, so the equality cases are the interesting half:
@@ -70,7 +74,7 @@ CASES = {
     # gate 2 boundary: one block carries exactly half the constraints, then half plus one
     "wide":  lambda: emit(200, [12] * 8, _half(200, 8, 12, 0)),
     "wider": lambda: emit(200, [12] * 8, _half(200, 8, 12, 1)),
-    # policy divergence
+    # policy divergence -- `wide` is the case where legacy and the current default disagree
     "dense": lambda: emit(160, [10] * 8, banded(160, 8, 10, 8)),
     "band":  lambda: emit(300, [10] * 20, banded(300, 20, 10, 6)),
 }

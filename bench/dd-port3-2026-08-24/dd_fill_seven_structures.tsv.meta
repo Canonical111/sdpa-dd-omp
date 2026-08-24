@@ -1,5 +1,24 @@
 # PHASE 7: dd TIMINGS FOR ALL SEVEN `fill` SWITCH STRUCTURES.
 #
+# ============================================================================================
+# DATED NOTE, 2026-08-24 (added after this experiment): THE MODE NAMES BELOW ARE THE ONES IN
+# FORCE WHEN THE ROWS WERE COLLECTED, AND THEY HAVE SINCE CHANGED MEANING.
+#
+#   route_mode "auto" in these rows = the PRE-PROMOTION default, the 0.25 aggregate policy.
+#                                     Today that is SDPA_BMAT_MODE=legacy.
+#   route_mode "fill" in these rows = the fill-derived policy, which is now the DEFAULT, so
+#                                     today it is what plain `auto`, `fill` and unset all select.
+#
+# The rows are primary data and are NOT rewritten to match the later naming. Read the "auto"
+# column as legacy/dense and the "fill" column as current-default/sparse.
+#
+# The conclusion at the bottom of this file -- "does NOT by itself justify flipping the default"
+# -- was accurate on the day it was written and is retained as the record of what this experiment
+# alone establishes. The default WAS subsequently flipped, on the strength of this table PLUS the
+# gate-3 soundness argument PLUS sdpa-gmp-omp's full-convergence evidence on the same seven
+# structures. See INSTALL.md and review/DD-ROUND3-FINAL-REPORT-2026-08-24.md section 10.
+# ============================================================================================
+#
 # WHY THIS WAS OPEN SINCE PLAN 2. The route census found 167 of 221 bootstrap instances that the
 # released `auto` policy sends DENSE and the opt-in `fill` policy would send SPARSE. Those 167 fall
 # into SEVEN distinct shapes (seven distinct m, all nBlock=17). dd timings existed for two of them,

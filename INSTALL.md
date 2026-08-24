@@ -182,7 +182,12 @@ and why.
 
 That is not one lucky problem. One representative of **each** of the seven classes was measured:
 
-| m | `auto` (dense) | `fill` (sparse) | faster | less memory |
+The column names are the *policies*, not today's mode strings: the dense column is what the
+pre-promotion `auto` chose and what `SDPA_BMAT_MODE=legacy` still chooses; the sparse column is what
+current `auto`/`fill` choose. (The archived TSV keeps the mode strings that were in force when it
+was collected — primary data is not rewritten to match later naming.)
+
+| m | pre-promotion `auto`, now `legacy` (dense) | current `auto`/`fill` (sparse) | faster | less memory |
 |---:|---:|---:|---:|---:|
 | 2,439 | 1.92 s / 116 MB | 0.61 s / 50 MB | 3.17× | 2.30× |
 | 4,489 | 9.22 s / 392 MB | 3.59 s / 213 MB | 2.57× | 1.84× |

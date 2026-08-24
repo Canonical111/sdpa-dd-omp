@@ -71,17 +71,30 @@ These are fixed-budget comparisons, not time-to-convergence results. Raw rows an
 > ### These documents describe `main`, which is ahead of the latest release
 >
 > `v7.1.3-omp.3` is the newest tagged release and is **correct** — it has the race fix. `main`
-> carries one further change to solver code (`sdpa_newton.cpp`, +37/−12): the map that decides
-> whether two blocks may overlap now uses **two bits** per Schur entry instead of one `int`.
+> carries **two** further changes to solver code, with different consequences:
 >
-> The only user-visible difference is **peak memory on sparse-route problems**: `dE4` is 382.0 MB
-> on `main` against 405.8 MB in `v7.1.3-omp.3`, and `dE3` via `fill` 277.5 MB against 294.2 MB.
-> Answers, routes and timings are unchanged. Wherever this README or `INSTALL.md` quotes a memory
-> figure, it is `main`'s.
+> **1. The overlap map uses two bits per Schur entry instead of one `int`** (`sdpa_newton.cpp`).
+> Answers, routes and timings are unchanged; only **peak memory on sparse-route problems** moves —
+> `dE4` 382.0 MB on `main` against 405.8 MB in the release, `dE3` 277.5 MB against 294.2 MB.
 >
-> If you want exactly what the documents describe, build from `main`; if you want a tagged
-> release, take `v7.1.3-omp.3` and expect about 6% more peak RSS on those problems. A
-> `v7.1.3-omp.4` tag is deliberately deferred pending review.
+> **2. The fill-derived route policy is now the default** (`sdpa_chordal.cpp`). This one **is
+> result-changing**, and on some problems it is a large change rather than a subtle one:
+>
+> | | `v7.1.3-omp.3` | `main` |
+> |---|---|---|
+> | default route on `dE3` | dense | **sparse** |
+> | `dE3` at 24 threads | 22.6 s / 671 MB | **4.5 s / 277 MB** |
+> | trajectory on affected problems | — | differs in the last digits |
+> | `dE4` | sparse | sparse (unchanged) |
+> | SDPLIB | — | **no problem changes route** |
+>
+> `SDPA_BMAT_MODE=legacy` on `main` reproduces the release's routing exactly. §"Route selection" in
+> [INSTALL.md](INSTALL.md) has the reasoning and the measurements.
+>
+> **So the two builds are not interchangeable on affected problems.** Wherever these documents
+> quote a route, a memory figure or a `dE3` timing, it is `main`'s. Build from `main` to get what
+> is described here; take `v7.1.3-omp.3` for a tagged release and expect the older routing and
+> about 6% more peak RSS. A `v7.1.3-omp.4` tag is deliberately deferred pending review.
 
 Each change carries its evidence in its commit message; [BENCHMARKS.md](BENCHMARKS.md) holds the
 regenerated tables.
