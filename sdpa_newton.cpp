@@ -861,32 +861,51 @@ void Newton::make_aggrigateIndex_SDP(InputData &inputData) {
     //     The released v7.1.3-omp.2 assumed the answer was always "no" and was wrong on any
     //     problem with a constraint pair nonzero in two blocks -- SDPLIB truss6 among them.
     //
-    // One int per stored bMat element, held only for this pass. Blocks are stamped from 1 so
-    // that 0 reads as "untouched" without a separate clear.
+    // TWO BITS PER STORED bMat ELEMENT, held only for this pass.
+    //
+    // The first version used one *int* per element, which cost dE4 about 24 MB -- a 6% rise in
+    // peak RSS on a 382 MB run, visible in dd_final_headline_postfix.tsv and traced there to
+    // exactly this array. Two bitsets are 16x smaller and answer the same two questions.
+    //
+    // The trick that removes the need for a per-block scratch list: `seen_blk` is cleared by
+    // RE-WALKING the block's own locations, which is O(pairs) time and zero extra memory. That
+    // second walk also sets `seen_any`, so the two passes cost one combined sweep, not two.
     SDP_blocks_disjoint = true;
     if (sparse_bMat.NonZeroCount > 0 && SDP_nBlock > 0) {
-        std::vector<int> stamp((size_t)sparse_bMat.NonZeroCount, 0);
+        const size_t nbytes = ((size_t)sparse_bMat.NonZeroCount + 7) / 8;
+        std::vector<unsigned char> seen_any(nbytes, 0); // written by SOME earlier block
+        std::vector<unsigned char> seen_blk(nbytes, 0); // written by THIS block; cleared per block
         // The whole map is walked even after sharing is found: stopping early would skip the
         // within-block duplicate check on every later block, and that check is the one that
         // guards a genuine memory error rather than a scheduling choice.
         for (int l = 0; l < SDP_nBlock; l++) {
-            const int tag = l + 1;
             for (int iter = 0; iter < SDP_number[l]; ++iter) {
                 const int t = SDP_location_sparse_bMat[l][iter];
-                const int was = stamp[(size_t)t];
-                if (was == tag) {
+                const size_t byte = (size_t)t >> 3;
+                const unsigned char bit = (unsigned char)(1u << ((unsigned)t & 7u));
+                if (seen_blk[byte] & bit) {
                     rError("Newton::make_aggrigateIndex_SDP: block " << l
                            << " writes sparse bMat element " << t
                            << " twice; the threaded assembly requires one writer per element"
                               " within a block");
                 }
-                if (was != 0) {
+                seen_blk[byte] |= bit;
+                if (seen_any[byte] & bit) {
                     // Shared with an earlier block. Nothing is wrong -- it is what an SDP with
                     // a constraint pair nonzero in two blocks looks like -- but those blocks
                     // may no longer overlap in time.
                     SDP_blocks_disjoint = false;
                 }
-                stamp[(size_t)t] = tag;
+            }
+            // Publish this block into seen_any and clear seen_blk, in one walk over the same
+            // locations. Clearing only what this block set is what keeps the cost O(pairs)
+            // rather than O(NonZeroCount) per block.
+            for (int iter = 0; iter < SDP_number[l]; ++iter) {
+                const int t = SDP_location_sparse_bMat[l][iter];
+                const size_t byte = (size_t)t >> 3;
+                const unsigned char bit = (unsigned char)(1u << ((unsigned)t & 7u));
+                seen_any[byte] |= bit;
+                seen_blk[byte] = (unsigned char)(seen_blk[byte] & ~bit);
             }
         }
     }
@@ -1895,6 +1914,35 @@ void Newton::census_bMat_sparse_SDP(InputData &inputData, FILE *fp) {
 
    Blocks are processed collectively: every thread walks the same block sequence so the
    worksharing constructs are encountered by all of them in the same order. See git log. */
+#ifdef SDPA_PROBE_NOREALLOC
+/* PROBE ONLY. Resize a private scratch matrix within capacity already held, without freeing or
+   reallocating, zeroing exactly the logical region the shipped path zeroes.
+
+   Exists to answer one question Phase 4 of the plan asks: on problems with many differently
+   shaped blocks, how much of the threaded assembly's loss is the BARRIER and how much is
+   DenseMatrix::initialize reallocating once per block per worker per iteration? Those two costs
+   are currently confounded, and a gate recalibrated from a confounded measurement would be
+   worthless.
+
+   Falls back to initialize() if the capacity is somehow insufficient, so the probe can never
+   silently read past the buffer. */
+static void probe_resize_reusing(DenseMatrix &m, int nRow, int nCol, DenseMatrix::Type type,
+                                 int cap_dim) {
+    const long long want = (long long)nRow * (long long)nCol;
+    const long long have = (long long)cap_dim * (long long)cap_dim;
+    if (m.de_ele == NULL || type != DenseMatrix::DENSE || want > have) {
+        m.initialize(nRow, nCol, type);
+        return;
+    }
+    m.nRow = nRow;
+    m.nCol = nCol;
+    m.type = type;
+    for (long long k = 0; k < want; ++k) {
+        m.de_ele[k] = 0.0;
+    }
+}
+#endif
+
 /* One i-group's contribution to the Schur complement, in one place.
 
    Extracted when the assembly grew two worksharing forms -- with and without `nowait` -- so
@@ -2008,13 +2056,35 @@ bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &c
             // Resized to THIS block. Note what initialize() actually does: it frees and
             // reallocates whenever nRow*nCol differs from the previous dimensions -- it does
             // NOT keep the largest buffer and use a leading submatrix, which is what an earlier
-            // version of this comment claimed. So a problem with many differently-shaped blocks
-            // pays an allocation per block per worker per iteration, and that cost has NOT been
-            // separated from the barrier's in the small-block losses (truss6). Measure the two
-            // apart before attributing that loss to barriers alone.
+            // version of this comment claimed.
+            //
+            // MEASURED, so this is no longer a worry to carry: a probe build that reuses the
+            // capacity instead (see probe_resize_reusing) removes 50-91% of ALL DenseMatrix
+            // allocations on problems with heterogeneous blocks -- 12_min 8665 -> 748, 10_min
+            // 5166 -> 587, 8_min 4079 -> 553 -- and moves the threaded assembly time by at most
+            // 3.1%, and by 0.3% on the largest reduction. truss6, the loss case that prompted
+            // the question, is 150 blocks of order 3 and one of order 1, so it barely
+            // reallocates at all (3129 -> 3124). Allocation is therefore NOT a material part of
+            // the small-block loss; the barrier and thread overhead are essentially all of it.
             if (owns_priv) {
+#ifdef SDPA_PROBE_NOREALLOC
+                /* MEASUREMENT PROBE, never in a release build (-DSDPA_PROBE_NOREALLOC).
+                   Reuses the capacity already reserved at max_dim instead of reallocating, while
+                   keeping this block's LOGICAL dimensions and zeroing exactly the same region the
+                   shipped path zeroes.
+
+                   It must not become a padding probe. The matrices are column-major with leading
+                   dimension nRow -- every kernel indexes de_ele[row + nRow*col] -- so the live
+                   region is exactly [0, nRow*nCol) and a larger buffer beyond it is never read
+                   or written. Same arithmetic, same memory traffic, same results; the only thing
+                   removed is the allocator call. Padding the COMPUTATION to max_dim would change
+                   the flop count and would measure the padding, not the allocation. */
+                probe_resize_reusing(priv1, shared1.nRow, shared1.nCol, shared1.type, max_dim);
+                probe_resize_reusing(priv2, shared2.nRow, shared2.nCol, shared2.type, max_dim);
+#else
                 priv1.initialize(shared1.nRow, shared1.nCol, shared1.type);
                 priv2.initialize(shared2.nRow, shared2.nCol, shared2.type);
+#endif
             }
             DenseMatrix &work1 = owns_priv ? priv1 : shared1;
             DenseMatrix &work2 = owns_priv ? priv2 : shared2;
@@ -2096,6 +2166,12 @@ bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &c
         }
     }
     if (bmat_asm_log()) {
+#ifdef SDPA_PROBE_ALLOC_COUNT
+        {
+            extern unsigned long long g_probe_dense_allocs;
+            rMessage("bmat asm probe: dense_allocs_so_far=" << g_probe_dense_allocs);
+        }
+#endif
         rMessage("bmat asm: team=" << actual_team << " groups=" << total_groups
                                    << " groups_executed=" << groups_done
                                    << " blocks_disjoint=" << (SDP_blocks_disjoint ? 1 : 0)
