@@ -708,6 +708,58 @@ void Newton::make_aggrigateIndex_SDP(InputData &inputData) {
         }
     }
 
+    // ---- validate the reader-supplied source indices BEFORE they become array subscripts ----
+    //
+    // Everything this function stores is later used as an INDEX by the assembly:
+    // inputData.A[constraint1[k]], A[i].SDP_sp_block[blockIndex1[k]] and
+    // sparse_bMat.sp_ele[location[k]]. Since the sparse SDP assembly is threaded, an
+    // out-of-range entry is an out-of-bounds WRITE from inside a parallel region -- which
+    // surfaces as a corrupted factor a long way from its cause. The size guard above proves
+    // the ALLOCATION is representable; it says nothing about the values, so this is the other
+    // half of "the aggregate map is validated".
+    //
+    // The duplicate check is not decoration. The pair enumeration below assumes each
+    // constraint appears at most once in a block's constraint list: if one repeated, the
+    // i == j ties would be kept twice and NonZeroCount would no longer equal the triangular
+    // count the array was sized to -- which is exactly the mismatch the post-check catches.
+    {
+        const int m_bmat = sparse_bMat.nRow;
+        int *seen = new int[m_bmat > 0 ? m_bmat : 1];
+        if (seen == NULL) {
+            rError("Newton::make_aggrigateIndex_SDP memory exhausted ");
+        }
+        for (int i = 0; i < m_bmat; i++) {
+            seen[i] = -1;
+        }
+        for (int l = 0; l < SDP_nBlock; l++) {
+            for (int k1 = 0; k1 < inputData.SDP_nConstraint[l]; k1++) {
+                const int i = inputData.SDP_constraint[l][k1];
+                if (i < 0 || i >= m_bmat) {
+                    rError("Newton::make_aggrigateIndex_SDP: block " << l << " entry " << k1
+                           << " names constraint " << i << ", outside [0," << m_bmat << ")");
+                }
+                const int ib = inputData.SDP_blockIndex[l][k1];
+                if (ib < 0 || ib >= inputData.A[i].SDP_sp_nBlock) {
+                    rError("Newton::make_aggrigateIndex_SDP: block " << l << " entry " << k1
+                           << " names sub-block " << ib << " of constraint " << i
+                           << ", which has " << inputData.A[i].SDP_sp_nBlock);
+                }
+                if (seen[i] == l) {
+                    rError("Newton::make_aggrigateIndex_SDP: constraint " << i
+                           << " appears more than once in block " << l
+                           << "; the pair enumeration requires it to appear at most once");
+                }
+                seen[i] = l;
+                const int ri = reverse_ordering[i];
+                if (ri < 0 || ri >= m_bmat) {
+                    rError("Newton::make_aggrigateIndex_SDP: reverse_ordering[" << i << "] = "
+                           << ri << ", outside [0," << m_bmat << ")");
+                }
+            }
+        }
+        delete[] seen;
+    }
+
     for (int l = 0; l < SDP_nBlock; l++) {
         int NonZeroCount = 0;
 
@@ -725,6 +777,12 @@ void Newton::make_aggrigateIndex_SDP(InputData &inputData) {
                     continue;
                 }
 
+                // Refuse to write past the triangular allocation rather than detect it after
+                // the fact -- NonZeroCount is the subscript of the five stores below.
+                if (NonZeroCount >= SDP_number[l]) {
+                    rError("Newton::make_aggrigateIndex_SDP: block " << l
+                           << " produced more than its " << SDP_number[l] << " allocated pairs");
+                }
                 // set index which A_i and A_j are not zero matrix
                 SDP_constraint1[l][NonZeroCount] = i;
                 SDP_constraint2[l][NonZeroCount] = j;
@@ -765,13 +823,35 @@ void Newton::make_aggrigateIndex_SDP(InputData &inputData) {
                     }
                 }
 
+                if (t < 0 || t >= sparse_bMat.NonZeroCount) {
+                    rError("Newton::make_aggrigateIndex_SDP: block " << l << " pair "
+                           << NonZeroCount << " maps to sparse bMat element " << t
+                           << ", outside [0," << sparse_bMat.NonZeroCount << ")");
+                }
                 SDP_location_sparse_bMat[l][NonZeroCount] = t;
                 NonZeroCount++;
             }
         } // for k1
+
+        // THE check, not a formality: both assembly routines loop to SDP_number[l], NOT to
+        // NonZeroCount. A short fill leaves the tail of these five arrays as whatever new[]
+        // returned, and the assembly then subscripts inputData.A[] with it.
+        if (NonZeroCount != SDP_number[l]) {
+            rError("Newton::make_aggrigateIndex_SDP: block " << l << " filled " << NonZeroCount
+                   << " of its " << SDP_number[l] << " allocated pairs; the assembly reads all "
+                   << SDP_number[l]);
+        }
     }     // for k  kth block
 }
 
+// DISPOSITION, recorded rather than left ambiguous: this function is DEAD CODE. Its only call
+// site is commented out in make_aggrigateIndex() below, and dd ships no SOCP reader, so nothing
+// reaches it. It was size-hardened alongside its two live siblings (an unguarded n(n+1)/2 in
+// dead code is still a landmine for whoever revives it), but its aggregate map is deliberately
+// NOT validated: the checks in the SDP and LP versions are exercised on every sparse-route run
+// and by the CI fixtures, whereas the same code here could never be executed and so could never
+// be trusted. If SOCP is ever revived, port the two validation blocks with it -- that is a
+// smaller and more honest debt than shipping an unexecutable validator.
 void Newton::make_aggrigateIndex_SOCP(InputData &inputData) {
     int t, ii, jj;
 
@@ -924,6 +1004,47 @@ void Newton::make_aggrigateIndex_LP(InputData &inputData) {
         }
     }
 
+    // Same validation as the SDP map above, and for the same reason: compute_bMat_sparse_LP
+    // uses these entries as subscripts into inputData.A[] and sparse_bMat.sp_ele[], and loops
+    // to LP_number[l] rather than to NonZeroCount. See the comment there.
+    {
+        const int m_bmat = sparse_bMat.nRow;
+        int *seen = new int[m_bmat > 0 ? m_bmat : 1];
+        if (seen == NULL) {
+            rError("Newton::make_aggrigateIndex_LP memory exhausted ");
+        }
+        for (int i = 0; i < m_bmat; i++) {
+            seen[i] = -1;
+        }
+        for (int l = 0; l < LP_nBlock; l++) {
+            for (int k1 = 0; k1 < inputData.LP_nConstraint[l]; k1++) {
+                const int i = inputData.LP_constraint[l][k1];
+                if (i < 0 || i >= m_bmat) {
+                    rError("Newton::make_aggrigateIndex_LP: block " << l << " entry " << k1
+                           << " names constraint " << i << ", outside [0," << m_bmat << ")");
+                }
+                const int ib = inputData.LP_blockIndex[l][k1];
+                if (ib < 0 || ib >= inputData.A[i].LP_sp_nBlock) {
+                    rError("Newton::make_aggrigateIndex_LP: block " << l << " entry " << k1
+                           << " names sub-block " << ib << " of constraint " << i
+                           << ", which has " << inputData.A[i].LP_sp_nBlock);
+                }
+                if (seen[i] == l) {
+                    rError("Newton::make_aggrigateIndex_LP: constraint " << i
+                           << " appears more than once in block " << l
+                           << "; the pair enumeration requires it to appear at most once");
+                }
+                seen[i] = l;
+                const int ri = reverse_ordering[i];
+                if (ri < 0 || ri >= m_bmat) {
+                    rError("Newton::make_aggrigateIndex_LP: reverse_ordering[" << i << "] = "
+                           << ri << ", outside [0," << m_bmat << ")");
+                }
+            }
+        }
+        delete[] seen;
+    }
+
     for (int l = 0; l < LP_nBlock; l++) {
         int NonZeroCount = 0;
 
@@ -939,6 +1060,10 @@ void Newton::make_aggrigateIndex_LP(InputData &inputData) {
                     continue;
                 }
 
+                if (NonZeroCount >= LP_number[l]) {
+                    rError("Newton::make_aggrigateIndex_LP: block " << l
+                           << " produced more than its " << LP_number[l] << " allocated pairs");
+                }
                 // set index which A_i and A_j are not zero matrix
                 LP_constraint1[l][NonZeroCount] = i;
                 LP_constraint2[l][NonZeroCount] = j;
@@ -979,10 +1104,21 @@ void Newton::make_aggrigateIndex_LP(InputData &inputData) {
                     }
                 }
 
+                if (t < 0 || t >= sparse_bMat.NonZeroCount) {
+                    rError("Newton::make_aggrigateIndex_LP: block " << l << " pair "
+                           << NonZeroCount << " maps to sparse bMat element " << t
+                           << ", outside [0," << sparse_bMat.NonZeroCount << ")");
+                }
                 LP_location_sparse_bMat[l][NonZeroCount] = t;
                 NonZeroCount++;
             }
         } // for k1
+
+        if (NonZeroCount != LP_number[l]) {
+            rError("Newton::make_aggrigateIndex_LP: block " << l << " filled " << NonZeroCount
+                   << " of its " << LP_number[l] << " allocated pairs; the assembly reads all "
+                   << LP_number[l]);
+        }
     }     // for k  kth block
 }
 
@@ -1690,8 +1826,12 @@ void Newton::census_bMat_sparse_SDP(InputData &inputData, FILE *fp) {
      - hasF2Gcal is group state, so it is likewise per worker (and per group).
      - the accumulation `sparse_bMat.sp_ele[SDP_location_sparse_bMat[l][iter]] += value` is
        DISJOINT within a block: each pair (i,j) owns one entry, so distinct iters write distinct
-       slots. Across BLOCKS the same slot can be revisited -- which is why the block loop stays
-       serial rather than being the thing parallelised.
+       slots. This is CHECKED, not assumed -- make_aggrigateIndex_SDP proves the locations of a
+       block are pairwise distinct before any of this runs.
+     - Across BLOCKS the same slot IS revisited: a constraint pair (i,j) that is nonzero in two
+       blocks contributes to the same entry from both. So no two threads may be in different
+       blocks at the same time, which is why each block's worksharing loop ends in a BARRIER.
+       An earlier version wrote `nowait` here and was wrong: see the note at the loop.
 
    Bit-identity therefore holds by construction, as for the Cholesky: every element receives
    exactly the same contributions computed by the same expressions, and no sum is reordered.
@@ -1772,7 +1912,7 @@ bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &c
             DenseMatrix &work1 = owns_priv ? priv1 : shared1;
             DenseMatrix &work2 = owns_priv ? priv2 : shared2;
 
-#pragma omp for schedule(dynamic) nowait
+#pragma omp for schedule(dynamic)
             for (int g = 0; g < ngroups; ++g) {
                 const int lo = gstart[l][g], hi = gstart[l][g + 1];
                 if (lo >= hi) {
@@ -1813,11 +1953,34 @@ bool Newton::compute_bMat_sparse_SDP_parallel(InputData &inputData, Solutions &c
                 }
                 groups_done++;
             }
-            // The nowait above lets a worker start the next block's groups while others finish
-            // this one; correctness does not depend on a barrier here because different blocks
-            // touch different work matrices and the bMat writes are += into distinct slots
-            // within a block. A barrier IS required before leaving the region, and the region's
-            // implicit end barrier provides it.
+            // NO `nowait` ON THE LOOP ABOVE, and this is the reason.
+            //
+            // The first version of this function had one, justified by "the bMat writes are +=
+            // into distinct slots within a block". That is true and irrelevant: `nowait` lets
+            // one worker start block l+1's groups while another is still in block l, and ACROSS
+            // blocks the slots are NOT distinct -- a constraint pair nonzero in both blocks
+            // accumulates into the same sparse_bMat entry from both. Two threads then did
+            // read-modify-write on the same dd_real.
+            //
+            // It was invisible because of WHICH problems the oracle was run on. The CI
+            // fixture (tests/gen_spchol_fixture.py) is block-diagonal by construction -- each
+            // constraint touches exactly one block -- so no slot is ever shared and the race
+            // has nothing to land on. dE3 and dE4, the two problems the headline figures come
+            // from, behave the same way. A fixture that cannot expose a defect is not evidence
+            // that the defect is absent, which is the lesson this fork keeps relearning.
+            //
+            // It is NOT confined to forced modes. SDPLIB truss6.dat-s routes sparse under the
+            // default `auto` policy, and the released v7.1.3-omp.2 binary returned five
+            // different objectives in five runs with no environment variables set at all:
+            // 2.16e+06, 9.72e+04, -9.0093934e+02, 1.66e+04, 9.82e+05, against the correct
+            // -9.0100140477088098e+02. 10_min.dat-s under SDPA_BMAT_MODE=sparse shows the
+            // mechanism most plainly: 16,219 pairs are written into at most m(m+1)/2 = 2,775
+            // slots, so cross-block sharing is forced by pigeonhole.
+            //
+            // The implicit barrier at the end of this worksharing loop is the fix. It costs one
+            // barrier per SDP block, which is nothing next to a block's groups, and it restores
+            // the property the region is supposed to have: the block loop is serial in the sense
+            // that matters, namely that all threads are in the same block at the same time.
         }
         if (owns_priv) {
             priv1.terminate();

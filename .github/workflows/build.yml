@@ -1028,6 +1028,65 @@ jobs:
           g++ -I. -Iexternal/i/QD/include -O2 tests/overflow_guards.cpp -o /tmp/ovg \
               -Lexternal/i/QD/lib -lqd
           /tmp/ovg
+          # The rError property has TWO halves and only one can be asserted from inside a
+          # process the macro terminates. The false half is the `ok` line above; this is the
+          # true half, in a subprocess. Required: nonzero status AND the streamed diagnostic.
+          # Status 2 is the binary's own "the macro did not exit" report -- treat it as a
+          # failure distinct from an assertion failure.
+          set +e
+          /tmp/ovg --rerror-true > /tmp/ovgt 2>&1
+          st=$?
+          set -e
+          cat /tmp/ovgt
+          if [ "$st" -eq 0 ]; then
+            echo "FAIL: rError on a true condition did not exit nonzero" >&2; exit 1
+          fi
+          if [ "$st" -eq 2 ]; then
+            echo "FAIL: rError on a true condition did not exit at all" >&2; exit 1
+          fi
+          grep -q "deliberate rError from the true branch, streaming 42 arguments" /tmp/ovgt \
+            || { echo "FAIL: exited, but without the streamed diagnostic" >&2; exit 1; }
+          echo "  rError exits nonzero and prints the diagnostic on a true condition"
+      - name: cross-block assembly -- the race the block-diagonal fixture cannot catch
+        run: |
+          set -e
+          # REGRESSION GUARD for the `nowait` data race fixed on 2026-08-23.
+          #
+          # The spchol fixture gives every constraint one block, so no Schur entry is ever
+          # written from two blocks and the cross-block accumulation is never exercised. This
+          # fixture makes each constraint span two ADJACENT blocks, which is what puts two
+          # writers on one sparse_bMat slot with an overlap window wide enough to hit. On the
+          # released v7.1.3-omp.2 binary it returned six different objectives in six runs; the
+          # stride and the adjacency both matter, see the generator's header.
+          #
+          # It routes sparse and threads its assembly with NO environment variables set.
+          python3 tests/gen_crossblock_fixture.py > xb.dat-s
+          SDPA_BMAT_LOG=1 ./sdpa_dd -ds xb.dat-s -o /tmp/xb0 -p param.sdpa 2>&1 \
+            | grep -a "bmat: " | head -1
+          grep -aq "SPARSE" /tmp/xb0 || ./sdpa_dd -ds xb.dat-s -o /tmp/xb0 -p param.sdpa \
+            2>&1 | grep -aq "SPARSE computation" \
+            || { echo "FAIL: fixture no longer routes sparse; it cannot test the assembly" >&2; exit 1; }
+          # 1. repeated runs at a FIXED thread count must agree. This is the property the bug
+          #    broke, and thread-count comparison alone would NOT have caught it.
+          for i in 1 2 3 4 5 6; do
+            ./sdpa_dd -ds xb.dat-s -o /tmp/xb.$i -p param.sdpa >/dev/null 2>&1
+            grep -a "^objValPrimal" /tmp/xb.$i >> /tmp/xb.objs
+          done
+          n=$(sort -u /tmp/xb.objs | wc -l)
+          cat /tmp/xb.objs
+          [ "$n" -eq 1 ] || { echo "FAIL: $n distinct objectives in 6 runs at one thread count" >&2; exit 1; }
+          [ -s /tmp/xb.objs ] || { echo "FAIL: no objective produced; the fixture did not solve" >&2; exit 1; }
+          echo "  6 runs, 1 distinct objective"
+          # 2. and the assembly stream must match the serial assembly byte for byte.
+          rm -f /tmp/xbp.bin /tmp/xbs.bin
+          SDPA_BMAT_ASM_DUMP=/tmp/xbp.bin ./sdpa_dd -ds xb.dat-s -o /tmp/xb1 -p param.sdpa >/dev/null 2>&1
+          SDPA_BMAT_ASM_MODE=serial SDPA_BMAT_ASM_DUMP=/tmp/xbs.bin \
+            ./sdpa_dd -ds xb.dat-s -o /tmp/xb2 -p param.sdpa >/dev/null 2>&1
+          sz=$(wc -c < /tmp/xbp.bin)
+          [ "$sz" -gt 100000 ] || { echo "FAIL: assembly stream is only $sz bytes; the run did not get far enough to mean anything" >&2; exit 1; }
+          cmp /tmp/xbp.bin /tmp/xbs.bin \
+            || { echo "FAIL: threaded assembly differs from serial on the cross-block fixture" >&2; exit 1; }
+          echo "  threaded assembly == serial, $sz bytes"
       - name: the census, and the fixture that reaches the F2/dense-Aj path
         run: |
           set -e

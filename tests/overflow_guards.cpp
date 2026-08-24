@@ -31,6 +31,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 #include <sdpa_tool.h>
 
@@ -50,7 +51,27 @@ static void check(bool ok, const char *what) {
     }
 }
 
-int main() {
+int main(int argc, char **argv) {
+    // --- the TRUE half of the rError property, run as a separate process by CI ---
+    //
+    // This mode exists because the false half alone is not a test of the macro. Before the
+    // do/while(0) wrapper the exit() was a SECOND statement, outside the if: the false
+    // condition exited (which the check below catches) and this form did not compile at all.
+    // So the true branch is written in exactly the shape that used to be a syntax error -- an
+    // unbraced `if` with an `else` -- and CI asserts from outside that the process exits
+    // nonzero AND prints the diagnostic. A macro that expanded to nothing would pass the
+    // false half and fail here.
+    if (argc > 1 && strcmp(argv[1], "--rerror-true") == 0) {
+        if (argc > 0)
+            rError("deliberate rError from the true branch, streaming " << 42 << " arguments");
+        else
+            printf("unreachable else arm\n");
+        // Only reached if rError did not exit. Distinct status so CI can tell this failure
+        // (macro did not exit) from an ordinary assertion failure below.
+        printf("FAIL: rError(...) on a true condition did not exit\n");
+        return 2;
+    }
+
     printf("checked-size helpers:\n");
 
     // --- sdpaTriangularCount: n(n+1)/2, the count that overflows int at n = 65536 ---
@@ -85,8 +106,9 @@ int main() {
     if (failures < 0)
         rError("unreachable: rError fired on a false condition");
     check(true, "if (false) rError(...) continues execution");
-    // The true branch is exercised by CI running this binary a second time with an argument,
-    // so a nonzero exit can be asserted from outside.
+    // The true half cannot be asserted from inside a process that the macro terminates, so CI
+    // runs this same binary a second time as `overflow_guards --rerror-true` and requires a
+    // nonzero exit plus the diagnostic text. See the mode at the top of main().
     printf("\n%s\n", failures == 0 ? "ALL OK" : "FAILURES");
     return failures == 0 ? 0 : 1;
 }
