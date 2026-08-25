@@ -166,31 +166,9 @@ from and still its `master` — each rebuilt from its own recipe, i9-13900K (24 
 `dE4` is the striking column: **24 cores buy upstream 4.9%**, because it routes sparse and upstream
 threads neither the sparse Schur-complement Cholesky nor its assembly. Both are threaded here.
 
-> **The clearest number is at *one* thread**, where no parallelism enters on either side. On `dE3`
-> the fork takes 31.33 s against upstream's 434.62 s — about **13.9×** — and that factors cleanly:
-> **2.47×** from better serial code running the *same* dense algorithm (176.29 s with
-> `SDPA_BMAT_MODE=legacy`), then **5.62×** from switching to the sparse algorithm. It was invisible
-> before the route promotion, because the fork used to default to the same dense route upstream
-> takes, so a default-vs-default comparison was measuring two implementations of one algorithm.
->
-> The honest counterweight: the fork's own 1→24 **scaling ratio** on `dE3` *fell*, 7.73× → 6.86×.
-> Nothing regressed — the sparse route is so much faster at one thread that there is less left for
-> threads to recover. Absolute time improved ~5× at every thread count while the scaling ratio got
-> worse; quoting either alone would mislead.
->
-> The 24-thread advantages are given to two figures because those cells are short (4–6 s) and run
-> to 6.7–7.4% spread. The 1-thread cells are exact to 0.1%.
-
 Against this fork's own historical baseline, measured the same way under a fixed four-iteration
 protocol, `dE4` runs in about **6.4 s** against **46.329 s** for the unmodified fork —
 about a **7.2×** improvement.
-
-> **Why "about", and not three significant figures.** That cell is short and jittery. Three
-> independent campaigns of three repeats each — nine runs of the same protocol on the same host —
-> span **6.234–6.761 s**, an **8.2%** spread, giving campaign ratios of 7.13×, 7.24× and 7.25×. The
-> pooled median of all nine is 6.428 s, i.e. **7.21×**. Quoting any single campaign's median to
-> three figures would be reading precision the measurement does not have; earlier revisions of this
-> file did exactly that, and the number moved every time it was re-measured.
 
 These are **fixed-budget comparisons, not time-to-convergence results** — neither problem converges
 at double-double precision under either tolerance tested (the shipped `epsilonStar=1e-30` and a
@@ -202,21 +180,6 @@ relaxed `1e-20`). Raw rows and full provenance:
 Upstream scales **negatively**: 11× slower on `control1` and 3.3× slower on `truss5` at 24 threads
 than at 1. This fork's work gating keeps `control1` flat to four decimal places. Full curves in
 [BENCHMARKS.md](BENCHMARKS.md).
-
-## Verifying the base commit
-
-The upstream base commit is not an ancestor of this repository's history, so fetch it first; this
-works from a fresh clone:
-
-```bash
-git remote add upstream https://github.com/nakatamaho/sdpa-dd.git
-git fetch --depth=1 upstream 6eaad8d9abff929bf8abc55ea166cbb2b09d07df
-git diff --stat 6eaad8d9abff929bf8abc55ea166cbb2b09d07df..HEAD
-```
-
-That diff is the complete, always-current list of changes. An enumeration in this file went stale
-twice and is deliberately not repeated; `git log` carries the rationale per change, and each change
-carries its evidence in its commit message.
 
 ## License
 
