@@ -153,10 +153,6 @@ overlap policy per cell:
 > advantage is *about 5×*, not 5.06× or 4.92×; both figures have been quoted and neither deserves
 > three significant figures. The dE4 and dE3-dense rows are steady and do support theirs.
 
-> **The two memory figures are `main`'s, not the latest release's.** The two-bit overlap map is not
-> in `v7.1.3-omp.3`, which holds one `int` per Schur entry and uses 405.8 MB and 294.2 MB on the
-> same two cells — about 6% more. Everything else here, including every timing, applies to both.
-
 These are `main loop time` over a **fixed 4-iteration budget** — per-iteration solver cost, not time
 to solution. Neither problem converged at double-double precision under
 **either of the two tolerance settings tested**: the shipped `epsilonStar=1e-30` and a relaxed

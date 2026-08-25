@@ -106,20 +106,16 @@ for f in README.md INSTALL.md BENCHMARKS.md; do
   fi
 done
 
-# --- 7. main is ahead of the latest release: say so wherever a main-only figure is quoted -------
-# The two-bit overlap map is on main and NOT in v7.1.3-omp.3, so the memory figures in these
-# documents describe something a reader cannot download. A v7.1.3-omp.4 tag is deferred pending
-# review, and until it exists the divergence must be stated rather than left for the reader to
-# discover. When v.4 IS cut, this rule should be deleted along with the notices it guards.
-# Matches both the exact figures ("382.0 MB") and the rounded ones the thread-count table carries
-# ("382 MB"). The rule fired on the exact form until 2026-08-25, when the documentation restructure
-# moved the exact figures into doc/technical.tex and left the table's rounded ones in INSTALL --
-# which would have made the rule, and its --self-test probe, silently dead. Both forms now count.
-if current_claims INSTALL.md | grep -qE '382(\.0)? MB|277(\.5)? MB'; then
-  grep -qF "not the latest release" INSTALL.md \
-    || bad "INSTALL.md quotes main-only memory figures without saying they are not in the release"
-fi
-# The README half of this rule is RETIRED as of 2026-08-25. It required that any README mention of
+# --- 7. main is ahead of the latest release ----------------------------------------------------
+# RETIRED IN FULL on 2026-08-25, on the condition its own comment named. The rule existed because
+# the two-bit overlap map and the fill-derived default route were on main and NOT in
+# v7.1.3-omp.3, so every memory figure and every dE3 route in these documents described something
+# a reader could not download; until a v.4 existed, that divergence had to be stated rather than
+# left to be discovered. v7.1.3-omp.4 IS that tag. main and the newest release are the same tree,
+# there is no divergence left to disclose, and a rule guarding notices that would now be FALSE is
+# worse than no rule. Deleted along with the notices, exactly as planned.
+#
+# Its README half had already gone, on 2026-08-25. It required that any README mention of
 # v7.1.3-omp.3 be accompanied by the "main is ahead of the latest release" notice; the owner removed
 # both the release warning and that notice from README, so the rule's condition can no longer be
 # true and the rule -- and its --self-test probe -- would have been silently dead. Deleting it is
@@ -199,7 +195,6 @@ probe "upstream table stops naming build"   BENCHMARKS.md 's/current `main`/that
 # tied to "2.3× less" and went dead the moment that became 2.4×.)
 probe "dE3-fill quoted to 3 sig figs"       INSTALL.md   's/about 5× faster/4.92× faster/'
 probe "dE4 headline to 3 sig figs"          README.md    's/about a \*\*7.2×\*\* improvement/a **7.13×** improvement/'
-probe "main-ahead notice dropped (INSTALL)" INSTALL.md   's/not the latest release/not the newest thing/'
 
 echo
 if [ "$dead" -eq 0 ]; then
