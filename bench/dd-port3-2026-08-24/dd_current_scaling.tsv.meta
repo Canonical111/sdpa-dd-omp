@@ -1,0 +1,57 @@
+# CURRENT-BUILD SCALING AND HEADLINE: everything re-measured on ONE tree, after the promotion.
+#
+# WHY. Until this run, no published table had been measured on the shipped code. The headline and
+# scaling tables came from v7.1.3-omp.3 (before the two-bit overlap map and before the route
+# promotion), the memory table from a build with the bitset but not the promotion, and the
+# upstream comparison from v7.1.3-omp.3 as well. Two changes had made those stale in different
+# ways:
+#   the TWO-BIT overlap map moved every sparse-route RSS figure by about 6%;
+#   the ROUTE PROMOTION changed dE3's DEFAULT route from dense to sparse, so "dE3 at its default"
+#     no longer meant what the older tables measured.
+#
+# PROVENANCE (captured by the run)
+#   fork commit    c80ca77670b3dafd5f372d23cf54440e6d9f6963 (main), clean tree
+#   fork binary    2ec45737f9977acb7165d264d16fe13d721783ce79a53d51c3c59e8eeb2fcf84
+#   param          9197d394cb3907c83ac3c021af7eef9241952030d2647af2fb045eab8d308853
+#                  (the fork's OWN shipped param.sdpa, maxIteration -> 4)
+#   input dE4      e57a8904d4f35bbdf32b4df9af6175163ca3f46b96a1d8fc58f3adf2956a0be5
+#   input dE3      97cfeb508ffeb10d42aebd6cee83f26538b59fdd4325254964cf3405af8a4ad0
+#   compiler       g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+#   host           pi -- i9-13900K, 24 physical cores, Ubuntu
+#   pinning        OMP_PROC_BIND=true OMP_PLACES=cores OMP_MAX_ACTIVE_LEVELS=1;
+#                  taskset -c 0-23 at 24 threads, taskset -c 0 at 1 thread
+#   rss            /usr/bin/time -v "Maximum resident set size"
+#   order          3 repeats, INTERLEAVED repeat-major over all six cells
+#
+# ROUTES ON THIS BUILD, logged in the same session:
+#   dE4 default  gate4 fill=13364097 -> SPARSE  blocks_disjoint=0  overlap=barrier
+#   dE3 default  gate4 fill=9551057  -> SPARSE  blocks_disjoint=0  overlap=barrier   <- CHANGED
+#   dE3 legacy   gate3 aggregate=9443183 cutoff=9.20212e+06 -> DENSE
+#
+# ---- MEDIANS OF THREE ----
+#
+#   cell                          1 thread    24 threads   1->24    peak RSS @24
+#   dE4, default (sparse)          46.555 s      6.390 s   7.29x       382.1 MB
+#   dE3, DEFAULT (now sparse)      31.361 s      4.417 s   7.10x       277.3 MB
+#   dE3, legacy (dense)           176.287 s     22.526 s   7.83x       670.8 MB
+#
+#   dE3 default against legacy at 24 threads: 5.10x faster on 2.42x less memory.
+#
+# DETERMINISM, and this is the stronger result: across all 18 runs there are exactly TWO distinct
+# objectives, one per problem -- identical at 1 and 24 threads AND identical between dE3's dense
+# and sparse routes. The route changes the trajectory in principle; on this problem it does not
+# change the printed answer at all.
+#
+# ---- THE dE4 HEADLINE CELL IS JITTERY, AND THE PUBLISHED RATIO REFLECTS THAT ----
+#
+# Three independent campaigns of three repeats each, same protocol, same host:
+#   dd_final_headline_postfix  6.428 / 6.495 / 6.761   median 6.495  -> 7.133x
+#   dd_v3_scaling_1t_24t       6.381 / 6.399 / 6.506   median 6.399  -> 7.241x
+#   this file                  6.234 / 6.390 / 6.428   median 6.390  -> 7.251x
+#   pooled (n=9)               6.234 .. 6.761, spread 8.2%, median 6.428 -> 7.208x
+#
+# So the honest published figure is ABOUT 7.2x, not any one campaign's median to three figures.
+# Earlier revisions quoted 7.18x, then 7.13x, and the number moved on every re-measurement --
+# which is what an 8.2% cell does to a three-significant-figure claim. The denominator, 46.329404 s,
+# is the historical unmodified fork under the same protocol (dd_historical_baseline.tsv) and is
+# itself steady: its three repeats span 0.04%.

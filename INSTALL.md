@@ -112,11 +112,11 @@ against 71.9 s) — but that is one machine and one problem set. See BENCHMARKS.
 come from **one `v7.1.3-omp.3` binary in one session** on pi (i9-13900K, 24 physical cores),
 medians of three interleaved repeats — dE3 (m=6067) and dE4 (m=7401):
 
-| | 1 thread | 24 threads | 1→24 |
-|---|---:|---:|---:|
-| dE4, sparse route (its default) | 46.612 s | **6.399 s** | **7.28×** |
-| dE3, sparse route (**its default since 2026-08-24**) | 31.370 s | **4.475 s** | 7.01× |
-| dE3, dense route (`SDPA_BMAT_MODE=legacy`) | 176.357 s | 22.645 s | 7.79× |
+| | 1 thread | 24 threads | 1→24 | peak RSS @24 |
+|---|---:|---:|---:|---:|
+| dE4, sparse route (its default) | 46.555 s | **6.390 s** | **7.29×** | 382 MB |
+| dE3, sparse route (**its default since 2026-08-24**) | 31.361 s | **4.417 s** | 7.10× | **277 MB** |
+| dE3, dense route (`SDPA_BMAT_MODE=legacy`) | 176.287 s | 22.526 s | 7.83× | 671 MB |
 
 **dE3's default route changed with the promotion described below.** It now takes the sparse route:
 about **4.5 s instead of 22.6 s** at 24 threads, on **277 MB instead of 671 MB** — roughly 5× faster
@@ -129,8 +129,11 @@ on 2.4× less memory than the route it used to take. `SDPA_BMAT_MODE=legacy` res
 > quoted and neither deserves three significant figures. The dE4 and dE3-dense rows are steady and do
 > support theirs.
 
-Raw rows and full provenance — build hash, compiler, input and parameter hashes, affinity, route
-and overlap policy per cell: [bench/dd-port3-2026-08-24/dd_v3_scaling_1t_24t.tsv](bench/dd-port3-2026-08-24/dd_v3_scaling_1t_24t.tsv).
+Measured on current `main` — one binary, both thread counts, three interleaved repeats, medians.
+Across all 18 runs there are exactly **two distinct objectives, one per problem**: identical at 1
+and 24 threads, and identical between dE3's dense and sparse routes. Raw rows and full provenance —
+build hash, compiler, input and parameter hashes, affinity, route and overlap policy per cell:
+[bench/dd-port3-2026-08-24/dd_current_scaling.tsv](bench/dd-port3-2026-08-24/dd_current_scaling.tsv).
 
 These are `main loop time` over a **fixed 4-iteration budget** — per-iteration solver cost, not
 time to solution. The assembly race fix costs `dE4` +0.7% and `dE3`-via-`fill` +2.2% in time, and —

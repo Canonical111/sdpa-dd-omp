@@ -9,6 +9,12 @@ including exact binary, compiler, parameter, input, affinity, route and repeat i
 earlier diagnostic campaigns retain a narrower record; their metadata says what it has rather than
 claiming a full tuple. Provenance is not manufactured after the fact.
 
+**The dE4 headline is quoted as ~7.2×, not to three figures.** Nine runs of the same protocol on
+the same host across three campaigns span 6.234–6.761 s — an **8.2%** spread — giving campaign
+ratios of 7.13×, 7.24× and 7.25× and a pooled median of 7.21×. No single campaign's median deserves
+three significant figures, and the number moved every time it was re-measured until this was said
+out loud.
+
 **[validate.py](validate.py) recomputes the listed current headline figures from these rows** and
 fails if any one of them no longer follows. CI runs it on every push, so those tables and the
 evidence cannot drift apart silently.
@@ -28,8 +34,9 @@ python3 bench/validate.py
 
 | file | backs |
 |---|---|
-| `dd_final_headline_postfix.tsv` | the README headline — dE4 **6.495 s**, **7.13×** over the historical baseline |
-| `dd_v3_scaling_1t_24t.tsv` | INSTALL's 1→24 thread table, both ends from one `v7.1.3-omp.3` binary |
+| `dd_final_headline_postfix.tsv` | one of three campaigns behind the dE4 headline (its own median: 6.495 s, 7.13×) |
+| `dd_v3_scaling_1t_24t.tsv` | 1→24 thread scaling, both ends from one `v7.1.3-omp.3` binary |
+| `dd_current_scaling.tsv` | the same, re-measured on current `main` after the route promotion — INSTALL's table |
 | `dd_upstream_vs_v3.tsv` | the upstream comparison in README and BENCHMARKS, 3 repeats, builds interleaved |
 | `dd_fill_seven_structures.tsv` | INSTALL's `fill` table — all seven route-switch structures |
 | `dd_bitset_memory.tsv` | INSTALL's memory claim, before and after the two-bit overlap map |
@@ -38,7 +45,7 @@ python3 bench/validate.py
 | `dd_de4_stream_census.tsv` | how often that race actually fired on dE4 — once in seventeen threaded runs |
 | `dd_gate_separation_{m1,pi}_4iter.tsv` | why the assembly gate was **not** retuned |
 | `dd_alloc_vs_barrier.tsv` | why the small-block loss is synchronisation and not allocation |
-| `dd_historical_baseline.tsv` | the pre-threading baseline the **7.13×** is measured against — so both sides of that ratio come from published rows |
+| `dd_historical_baseline.tsv` | the pre-threading baseline the dE4 headline is measured against — so both sides of that ratio come from published rows |
 
 ## Reproducing a row
 

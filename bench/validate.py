@@ -87,9 +87,32 @@ def near(a, b, tol=0.005):
     return a is not None and abs(a - b) / b <= tol
 
 d4 = med(h, "mainloop_s", problem="dE4", mode="auto")
-ck(near(d4, 6.495, 0.01), "README headline: dE4 6.495 s", f"got {d4}")
-ck(near(HIST_DE4_24T / d4, 7.13, 0.01), "README headline: 7.13x over the historical baseline",
-   f"got {HIST_DE4_24T/d4:.3f}")
+ck(near(d4, 6.495, 0.01), "headline campaign 1: dE4 6.495 s", f"got {d4}")
+
+# The published headline is POOLED across all three campaigns of this cell, because a single
+# campaign's median is not stable to three figures -- nine runs span 8.2%. Recomputed here rather
+# than asserted, and the ~7.2x in README must bracket it.
+cur = rows("dd_current_scaling.tsv")
+pool = ([float(r["mainloop_s"]) for r in h  if r["problem"] == "dE4" and r["mode"] == "auto"] +
+        [float(r["mainloop_s"]) for r in s  if r["problem"] == "dE4" and r["mode"] == "auto"
+                                            and r["threads"] == "24"] +
+        [float(r["mainloop_s"]) for r in cur if r["problem"] == "dE4" and r["mode"] == "default"
+                                            and r["threads"] == "24"])
+ck(len(pool) == 9, "dE4 headline cell: 9 published runs across 3 campaigns", str(len(pool)))
+spread = (max(pool) - min(pool)) / st.median(pool) * 100
+ck(spread > 5.0, "that cell really is jittery, which is why ~7.2x is an approximation",
+   f"spread {spread:.1f}%")
+ratio = HIST_DE4_24T / st.median(pool)
+ck(7.15 <= ratio <= 7.25, "pooled headline lands in the stated ~7.2x", f"got {ratio:.3f}")
+
+# current-build cells, the ones INSTALL now publishes
+for p_, m_, th, want in [("dE4","default","1",46.555), ("dE4","default","24",6.390),
+                         ("dE3","default","1",31.361), ("dE3","default","24",4.417),
+                         ("dE3","legacy","1",176.287), ("dE3","legacy","24",22.526)]:
+    got = med(cur, "mainloop_s", problem=p_, mode=m_, threads=th)
+    ck(near(got, want, 0.01), f"current build: {p_}/{m_} at {th}t = {want} s", f"got {got}")
+ck(len({r["objValPrimal"] for r in cur if r["problem"] == "dE3"}) == 1,
+   "current build: dE3 gives ONE objective across both routes and both thread counts")
 
 for p, m, th, want in [("dE4","auto","1",46.612), ("dE4","auto","24",6.399),
                        ("dE3","auto","1",176.357), ("dE3","auto","24",22.645),

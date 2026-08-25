@@ -110,6 +110,22 @@ if grep -qE 'v7\.1\.3-omp\.3' README.md; then
     || bad "README.md points at the release without noting that main is ahead of it"
 fi
 
+# --- 8. the dE4 headline must not be quoted to three significant figures ------------------------
+# Nine runs across three campaigns span 8.2% on that cell, giving ratios of 7.13x, 7.24x and 7.25x.
+# Every earlier revision picked one campaign's median and published it to three figures, and the
+# number moved on every re-measurement. "About 7.2x" is what the data supports.
+# Narrow to the HEADLINE ratio only. 7.24x also appears legitimately as the fork-versus-UPSTREAM
+# advantage, which is a different quantity measured against a different denominator, so the rule
+# keys on 7.13x -- the specific over-precise headline that kept recurring -- plus a positive
+# requirement that the approximation is stated.
+for f in README.md INSTALL.md BENCHMARKS.md; do
+  if current_claims "$f" | tr -d '*_' | grep -qE '7\.13×'; then
+    bad "$f quotes the dE4 headline as 7.13x; its cell spreads 8.2% across 9 runs (say ~7.2x)"
+  fi
+done
+grep -qE 'about a \*\*7\.2×\*\* improvement' README.md \
+  || bad "README.md no longer states the dE4 headline as an approximation"
+
 if [ "${1:-}" != "--self-test" ]; then
   if [ "$fail" -eq 0 ]; then
     note ok "documentation claims match the archived evidence"
@@ -159,6 +175,7 @@ probe "upstream table stops naming build"   BENCHMARKS.md 's/both builds `v7.1.3
 # memory ratio that legitimately changes when the memory is re-measured. (The previous probe was
 # tied to "2.3× less" and went dead the moment that became 2.4×.)
 probe "dE3-fill quoted to 3 sig figs"       INSTALL.md   's/about 5× faster/4.92× faster/'
+probe "dE4 headline to 3 sig figs"          README.md    's/about a \*\*7.2×\*\* improvement/a **7.13×** improvement/'
 probe "main-ahead notice dropped (INSTALL)" INSTALL.md   's/not the latest release/not the newest thing/'
 probe "main-ahead notice dropped (README)"  README.md    's/These documents describe `main`, which is ahead of the latest release/Current figures/'
 

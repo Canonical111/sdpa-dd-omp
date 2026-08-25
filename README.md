@@ -49,15 +49,23 @@ described below.
 
 Since then the two remaining serial regions on the large-sparse path have been threaded: the
 **sparse Schur-complement Cholesky** and the **sparse Schur-complement assembly**. On the 24-core
-i9-13900K benchmark host, under a fixed four-iteration protocol, `v7.1.3-omp.3` runs dE4 (m=7401)
-in **6.495 s** against **46.329 s** for the historical unmodified-fork baseline measured the same
-way — a **7.13×** improvement. The factor and the assembled matrix are both **bit-identical at any
+i9-13900K benchmark host, under a fixed four-iteration protocol, dE4 (m=7401) runs in about
+**6.4 s** against **46.329 s** for the historical unmodified-fork baseline measured the same way —
+about a **7.2×** improvement. The factor and the assembled matrix are both **bit-identical at any
 thread count, and across repeated runs at one thread count**, verified by comparing the structures
 themselves rather than the printed solution. Every runtime knob is documented in
 [RUNTIME.md](RUNTIME.md).
 
+> **Why "about", and not three significant figures.** That cell is short and jittery. Three
+> independent campaigns of three repeats each — nine runs of the same protocol on the same host —
+> span **6.234–6.761 s**, an **8.2%** spread, giving campaign ratios of 7.13×, 7.24× and 7.25×.
+> The pooled median of all nine is 6.428 s, i.e. **7.21×**. Quoting any single campaign's median to
+> three figures would be reading precision the measurement does not have; earlier revisions of this
+> file did exactly that, and the number moved every time it was re-measured.
+
 These are fixed-budget comparisons, not time-to-convergence results. Raw rows and full provenance:
-[bench/dd-port3-2026-08-24/dd_final_headline_postfix.tsv](bench/dd-port3-2026-08-24/dd_final_headline_postfix.tsv).
+[bench/dd-port3-2026-08-24/dd_final_headline_postfix.tsv](bench/dd-port3-2026-08-24/dd_final_headline_postfix.tsv)
+and [dd_current_scaling.tsv](bench/dd-port3-2026-08-24/dd_current_scaling.tsv).
 
 > **Do not use `v7.1.3-omp.2`.** It contains a data race in the threaded assembly: on a problem
 > whose **sparse assembly is threaded** *and* whose SDP blocks share Schur-complement entries —
