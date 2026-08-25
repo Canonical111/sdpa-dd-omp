@@ -19,13 +19,18 @@ comparisons are strict `>`, so the equality cases are the interesting half:
   m101    m = 101            the first m that does
   nb5     nBlock = 5         gate 1 wants nBlock > 5, so 5 must NOT pass
   nb6     nBlock = 6         the first nBlock that does
-  wide    one block holds exactly half the constraints -- gate 2 wants > 0.5*m, so this must NOT
-          trip it, and one more constraint in that block must
-  wider   the same with one more constraint in the big block
-  dense   a problem dense enough that the aggregate policy declines it
-  band    a banded problem whose ordered fill is small while its aggregate density is not --
-          this is the shape on which `auto` and `fill` DIVERGE, which is the case the unset
-          assertion actually needs
+  wide    one block holds EXACTLY half the constraints -- gate 2 wants > 0.5*m, so this must NOT
+          trip it. It is also THE CASE THAT MATTERS: `legacy` then stops at gate 3 (aggregate
+          11,430 over its 10,000 cutoff) while the current default carries on to gate 4 and
+          routes SPARSE. Without a fixture where the two policies disagree, "unset == auto" is
+          satisfied by every possible route table and proves nothing.
+  wider   one more constraint in that block, which DOES trip gate 2
+  dense   a problem dense enough that both policies decline it at gate 2
+  band    a banded problem whose ordered fill is small while its aggregate density is not. It
+          does NOT diverge -- both policies route it DENSE -- and that is the point: they reach
+          the same verdict through DIFFERENT cutoffs on the same aggregate (49,500 against the
+          default's 36,000 and `legacy`'s 22,500), which pins the cutoff wiring where the route
+          alone would not distinguish them.
 
 Usage: gen_route_fixture.py <case>
 """
