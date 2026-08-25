@@ -1,0 +1,705 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1.1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+
+\newtheorem{lemma}{Lemma}
+\newtheorem{corollary}{Corollary}
+\newcommand{\aggr}{\rho_{\mathrm{agg}}}
+\newcommand{\rfill}{\rho_{\mathrm{fill}}}
+\newcommand{\bMat}{B}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\texttt{sdpa-dd-omp}: threading a double-double SDP solver,\\
+and making its threaded results reproducible}
+\author{\texttt{sdpa-dd-omp} --- technical record}
+\date{2026-08-25}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent
+\code{sdpa-dd} solves semidefinite programs in double-double arithmetic --- roughly $32$
+significant decimal digits, carried as an unevaluated sum of two IEEE doubles. It builds with
+OpenMP, but threading it as shipped is not merely unprofitable, it is unsound: on small problems
+more cores make it monotonically slower ($24.5\times$ slower on $24$ cores than on one, on a
+user's $m{=}16$ input), and on any problem its threaded runs are not reproducible.
+
+This document records what was changed and why. Five things are worth a reader's attention.
+First, the dominant cost is the Schur-complement build and factorisation, and on large sparse
+problems upstream threads \emph{neither} the sparse factorisation nor its assembly, so
+twenty-four cores buy it $4.9\%$. Second, threading a multiprecision solver is mostly a
+\emph{reproducibility} problem: this fork's assembled Schur complement and its Cholesky factor are
+bit-identical at any thread count \emph{by construction}, and that is asserted against the
+structures themselves rather than against printed digits. Third, one of this fork's own released
+versions shipped a data race, and the account of how it was missed is more useful than the fix.
+Fourth, the rule choosing between a dense and a sparse factorisation of the Schur complement was
+mis-tuned in a way a retune would not have found: one of its four gates is not a heuristic at all
+but a provable consequence of another. Fifth, on \code{aarch64} the compiler's default
+floating-point contraction silently changes double-double arithmetic, so results differed between
+platforms until contraction was pinned off.
+\end{abstract}
+
+\tableofcontents
+
+\newpage
+
+\section{The solver, and where the time goes}
+
+At each interior-point iteration the solver forms the $m \times m$ Schur complement $\bMat$ (the
+``\code{bMat}''), factorises it, and performs a forward and a backward triangular solve against
+the factor. In double-double arithmetic every scalar operation is an inlined sequence of some ten
+to twenty IEEE operations with strict ordering requirements, so the constant factors a
+double-precision solver hides become the whole story.
+
+Two regimes matter, and they have different bottlenecks.
+
+\paragraph{Small and medium problems ($m \lesssim 10^3$).} $\bMat$ is dense, and the cost is the
+constraint loop that builds it plus a dense Cholesky. This is the regime SDPLIB covers, and it is
+the regime upstream's own threading was written for.
+
+\paragraph{Large sparse problems ($m \sim 10^3$--$10^4$).} $\bMat$ has a sparsity structure worth
+exploiting, and the solver can store and factor it sparsely. Here the cost splits between the
+\emph{sparse assembly} --- scattering constraint-pair contributions into the stored nonzeros ---
+and the \emph{sparse Cholesky}. \textbf{Upstream threads neither.} This is why twenty-four cores
+buy upstream $4.9\%$ on \code{dE4} ($m{=}7401$): the problem routes sparse, and both of the
+regions that dominate it are serial code. It is also why the SDPLIB tables understate this fork:
+every SDPLIB problem takes a dense $\bMat$ and never enters the path where the difference lives.
+
+A methodological note, recorded because the discarded hypothesis is part of the result: the first
+optimisation proposed for the sibling \code{sdpa-gmp} port was a per-block parallel Cholesky over
+the SDP blocks. Profiling assigned $66$--$80\%$ of runtime to the $\bMat$ build, and the proposed
+region did not appear in the profile at all. It was abandoned on the evidence.
+
+\section{Kernel and threshold defects in the inherited code}
+
+\subsection{The lost zero-skip in \code{Rgemm}}
+
+Netlib \code{dgemm} guards its inner update with a test for a zero multiplier. In
+\code{mplapack}~2.0.1 that guard was dropped from the OpenMP variants. In double precision the
+guard is a minor optimisation; in double-double it is not, because ``multiply by zero'' still pays
+a full multiprecision call. Restoring it in \code{mplapack/Rgemm\_NN\_omp.cpp} and
+\code{Rgemm\_NT\_omp.cpp} recovers up to $2\times$ on the serial path.
+
+\subsection{OpenMP regions entered regardless of problem size}
+
+Upstream enters its parallel regions without asking whether there is enough work to repay the
+fork/join. It contains a threshold mechanism, but the mechanism is disabled behind \code{if (0)},
+and it cannot simply be switched on: the \code{\_ref} bodies it dispatches to are absent and the
+tree would not link.
+
+The consequence is not a small inefficiency. On a user's \code{max\_custom\_scaled.dat-s}
+($m{=}16$), upstream degrades \emph{monotonically} at every thread count, ending $24.5\times$
+slower on $24$ cores than on one. On SDPLIB \code{control1} it is $11\times$ slower at $24$
+threads than at $1$; on \code{truss5}, $3.3\times$ slower. This fork gates entry on work, matrix
+width and nesting depth, and runs \code{Rdot} serially; \code{control1} is then flat to four
+decimal places across the whole thread ladder. The gain on small problems reaches $13\times$, and
+it also removes a source of nondeterminism, since a reduction whose combining order followed
+thread scheduling was the mechanism behind upstream's varying iteration counts.
+
+\subsection{Timers that reported worker-seconds as elapsed time}
+
+The reduced per-formula timers summed time across threads and printed the sum where elapsed time
+was expected, so a threaded run appeared to spend more time in a region the more it was
+parallelised. They are now reported as worker-seconds, labelled as such.
+
+\section{Reading high-precision input}
+
+This defect is not a performance matter and is the one most likely to have silently corrupted
+someone's results.
+
+QD's decimal-to-\code{dd\_real} converter overflows internally once the mantissa reaches $309$ or
+more digits, and \textbf{returns success while producing NaN}. A $600$-digit spelling of an
+ordinary-magnitude number therefore entered the SDP matrices as NaN and surfaced later as a bogus
+\code{cholesky miss condition} at iteration~$0$ --- the solver reporting an infeasible problem
+when the problem was fine.
+
+The isolation is clean. On a user's $600$-digit input, upstream terminates after
+\textbf{0 iterations} with \code{objValPrimal = -0.0}; this fork reaches \code{pdOPT} in
+\textbf{43 iterations}. Truncating that same input to \textbf{45 significant digits} --- beyond
+double-double's own $\sim$$32$-digit resolution, and far below the converter's $\sim$$309$-digit
+limit --- makes \emph{upstream} solve it correctly. Token length is the only thing that changed.
+Nor is the truncation doing arithmetic work: this fork's answers on the $600$-, $45$- and
+$30$-digit inputs agree to ten significant digits, and a difference that small cannot turn a NaN
+into a correct solve.
+
+The reader now validates full decimal syntax, keeps the original conversion path for mantissas up
+to $308$ digits so ordinary inputs stay bit-identical, normalises longer mantissas with the
+exponent preserved, and checks parser status \emph{and} finiteness rather than letting a NaN reach
+the solver.
+
+\section{Floating-point contraction, and why this fork pins it off}
+
+\subsection{The mechanism}
+
+GCC and clang default to \code{-ffp-contract=fast} for C++. Double-double arithmetic is
+header-inline, so \emph{the compiler} decides whether the compensation terms of the
+double-double algorithms get folded into a fused multiply-add. Folding there is not an identity.
+The whole point of a \code{two\_sum} is to compute the rounding error that the primary operation
+discarded; an FMA that keeps the intermediate product exact deletes the very quantity being
+measured, and the double-double invariant is lost.
+
+The platform dependence follows immediately. On baseline \code{x86-64} there is no FMA for the
+compiler to fold into, so those binaries behave as if contraction were off. On \code{aarch64},
+\code{fmadd} is baseline ISA, so they do not. The two platforms then run different arithmetic on
+the same source.
+
+\subsection{The fix, and its cost}
+
+This fork builds with \code{-ffp-contract=off} \textbf{by default}, applied to every SDPA and
+\code{mplapack} translation unit \emph{and} to the bundled QD. With it, an M1 build matches the
+published \code{x86-64} reference on \textbf{20 of 20} SDPLIB problems --- iteration counts and
+full-precision objectives alike --- where the unpinned build matches on none at the state-hash
+level.
+
+Hardware FMA is not lost. \code{-ffp-contract=off} does not disable an explicit
+\code{\_\_builtin\_fma}, so QD's \code{two\_prod} keeps its single \code{fmsub} and the
+\code{aarch64} speedup is retained in full. The cost is $\sim$$1\%$ per iteration at one thread
+and $\sim$$1.7\%$ at eight. On \code{x86-64} the output is unchanged and so is the object code:
+all $76$ translation units compile to byte-identical \code{.text} with and without the flag.
+
+\code{--enable-fp-contract=fast} recovers the old, platform-dependent behaviour. Iteration counts
+published for \code{arm64} \emph{before} this became the default are counts of the unpinned
+solver; the per-problem deltas are in \code{bench/b4\_mac\_rebaseline.tsv}.
+
+\section{What was threaded, and what it costs correctness}
+
+Four regions are threaded here that are serial or ineffectively threaded upstream.
+
+\subsection{The \texorpdfstring{$\bMat$}{bMat} constraint loop}
+
+The dense-route Schur-complement build. This was the largest single gain in the original port and
+is where the SDPLIB improvements come from.
+
+\subsection{The sparse Schur-complement Cholesky}
+
+\textbf{Bit-identical at any thread count by construction}, and this is a property of the loop's
+dependence structure rather than of the arithmetic --- so it does not depend on the working
+precision, nor on the values of the work gates. For a fixed pivot, each \code{k1} owns exactly one
+destination row; every read comes from the pivot row; and a barrier per pivot preserves pivot
+order. No sum is reassociated, because no destination is written by two workers.
+
+\subsection{The sparse Schur-complement assembly}
+
+Parallel over $i$-groups, serial over blocks. Each worker holds private \code{work1}/\code{work2}
+scratch matrices, so concurrent groups cannot race through shared scratch, and the accumulation
+into $\bMat$ is disjoint \emph{within} a block. That last qualification is load-bearing and is the
+subject of \S\ref{sec:race}.
+
+\subsection{Cholesky panel kernels and the \texorpdfstring{$X$/$Z$}{X/Z} inverse-Cholesky triangulars}
+
+Threaded behind measured work gates.
+
+\subsection{The triangular solves: forward yes, backward no}
+
+The forward substitution is a \emph{scatter}: within a row the writes go to distinct destinations,
+so there is no reassociation and the threaded result is bit-identical by construction. The sibling
+\code{sdpa-gmp-omp} threads it on that basis.
+
+The backward substitution is a \emph{dot product}, and splitting a dot product across workers
+reassociates the sum. In \code{sdpa-gmp} this is recoverable: GMP carries a runtime precision, so
+the accumulator can be widened with \code{mpf\_set\_prec(acc, 2*prec)} and the partial sums
+combined without loss. \code{dd\_real} has no runtime precision to double --- the type \emph{is}
+its precision --- so the same remedy does not exist here. In \code{sdpa-gmp-omp} the backward pass
+is therefore opt-in behind \code{SDPA\_SOLVE\_BACKWARD} and off by default; in this fork it is not
+threaded. Trading bit-reproducibility for a fraction of one phase is not a trade this fork makes
+silently.
+
+\section{A data race in the threaded assembly, and its fix}
+\label{sec:race}
+
+\subsection{What shipped}
+
+The threaded sparse assembly's worksharing loop carried \code{nowait}, justified by the observation
+that the $\bMat$ writes are \code{+=} into distinct slots \emph{within a block}. That observation
+is true and insufficient. \code{nowait} lets one worker enter block $l+1$ while another is still in
+block $l$, and \emph{across} blocks the slots are not distinct: a constraint pair that is nonzero
+in two blocks accumulates into the same entry from both.
+
+The consequence, on SDPLIB \code{truss6} at default settings, where the correct objective is
+\code{-9.0100140477088098e+02}. Five consecutive runs of \code{v7.1.3-omp.2} returned
+
+\begin{center}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\code{2.1611901436772943e+06} & \code{9.7205414006274572e+04} & \code{-9.0093934416427931e+02} \\
+\code{1.6632246196208220e+04} & \code{9.8204796932176279e+05} & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The third value is the instructive one: it is wrong in the \emph{fifth significant digit}, not
+absurd. A tolerance check against a reference would have accepted it. On one host, three of five
+wrong values agreed with each other to four digits, so a small-sample spread test would have
+called the run stable.
+
+\subsection{Why nothing caught it}
+
+Three reasons, none of them ``we did not test''.
+
+\begin{enumerate}
+\item \textbf{The CI fixture was block-diagonal by construction.} No Schur entry is ever written
+      twice in it, so the race had nothing to land on. Every stream-identity assertion ran on that
+      fixture, and every one of them passed.
+\item \textbf{The large problems were not immune, and were believed to be.} Both \code{dE3} and
+      \code{dE4} report \code{blocks\_disjoint=0}. The race fired on \code{dE4} \emph{once in
+      seventeen} threaded runs. They escaped notice because a rare race compared \emph{once} is a
+      race not tested for.
+\item \textbf{The guarantee was stated in a form that misdirected every check.} It was always
+      written as ``bit-identical at any thread count'', which points every test at comparisons
+      \emph{between} thread counts. A race that moves both sides passes those comparisons. The
+      check that catches it is repetition at \emph{one} thread count, and nobody had written it.
+\end{enumerate}
+
+\subsection{The fix}
+
+The barrier is taken, but only where the finished aggregate map \emph{proves} it is needed. One
+setup pass asks whether any Schur entry is written by more than one SDP block:
+
+\begin{quote}
+\code{if (blocks\_disjoint)} $\rightarrow$ \code{\#pragma omp for schedule(dynamic) nowait} \\
+\code{else} $\rightarrow$ \code{\#pragma omp for schedule(dynamic)}
+\end{quote}
+
+with a single extracted \code{Newton::assemble\_group()} body shared by both worksharing forms, so
+the two paths cannot drift apart. Block-diagonal problems keep \code{nowait}; cross-block problems
+take the barrier. \emph{The fast path is taken because the map was checked} --- which is precisely
+the discipline whose absence caused the defect.
+
+The disjointness pass itself uses two bitsets over the stored Schur entries, \code{seen\_any} and
+\code{seen\_blk}, with \code{seen\_blk} cleared by re-walking the block's own locations rather than
+by maintaining a scratch list. That is $O(\text{pairs})$ and two bits per stored entry, replacing
+an earlier one-\code{int}-per-entry map that was $16\times$ larger.
+
+Cost, on the four-iteration budget protocol: \code{dE4} $+0.7\%$, \code{dE3} via the fill route
+$+2.2\%$, and nothing measurable in memory --- \code{dE4} is $382.0$~MB against $382.2$~MB before
+the fix.
+
+\subsection{The regression fixture, and why its first version was worthless}
+
+\code{tests/gen\_crossblock\_fixture.py} generates an $m{=}480$ problem that routes sparse, threads,
+and shares Schur entries between blocks. Its first version used a block stride of $7$, and the
+\emph{racing} binary passed it $6/6$: blocks seven apart are never in flight together. Adjacency is
+load-bearing, and the stride must be~$1$.
+
+CI now asserts three things: that repeated runs at \emph{one} thread count agree; that the threaded
+assembly stream equals the serial one; and that the overlap policy is the computed one \emph{in
+both directions}, so a fixture that stopped exercising the cross-block case would fail rather than
+pass vacuously.
+
+\section{The factorisation choice}
+
+\subsection{Four gates}
+
+The chooser decides whether $\bMat$ is stored and factored densely or sparsely. It is a cascade of
+four gates; a problem goes dense as soon as any gate rejects.
+
+\begin{enumerate}
+\item a coarse structural screen, which decides the great majority of problems;
+\item a screen on the number of blocks contributing, against $c \cdot m$;
+\item a pre-screen on the \textbf{aggregate} sparsity pattern of $\bMat$, against $F \cdot m^2$;
+\item the real test, on the \textbf{ordered fill} of the symbolic Cholesky factor, against
+      $F \cdot m^2$.
+\end{enumerate}
+
+Write $\aggr$ for the density of the aggregate pattern and $\rfill$ for the density of the ordered
+fill, both as fractions of $m^2$.
+
+\subsection{One constant doing two unrelated jobs}
+
+Gates 2 and 3 were both driven by a single constant, so neither could be retuned without moving the
+other. Splitting it frees gate~3 --- and once gate~3 is free, it stops being a tuned threshold at
+all.
+
+\subsection{Gate 3 is not a heuristic}
+
+\begin{lemma}
+Symbolic Cholesky factorisation only \emph{adds} entries: every nonzero of the aggregate pattern is
+a nonzero of the factor's pattern. Hence $\rfill \ge \aggr$ always.
+\end{lemma}
+
+\begin{corollary}
+$\aggr > F \implies \rfill > F$. So whenever gate~3 rejects at cutoff $F$, gate~4 would also have
+rejected at cutoff $F$.
+\end{corollary}
+
+Gate~3 at $F$ is therefore a \emph{provable early exit} from gate~4, not an independent heuristic:
+it can only skip work, never change the verdict. And that makes $F$ the \textbf{largest sound
+cutoff} for gate~3. Anything smaller rejects problems gate~4 would have accepted.
+
+\subsection{What the old value was, and why it was wrong}
+
+Gate~3 rejected at $0.25 \cdot m^2$ while gate~4 rejected at $0.40 \cdot m^2$. Gate~3 was thus the
+\emph{stricter} test, and every problem with $\aggr \in (0.25, 0.40]$ was sent dense
+\textbf{without gate~4 ever running}. The cheap pre-screen overruled the real test.
+
+The correction is to demote gate~3 to gate~4's own constant. \textbf{One tunable, $F = 0.40$,
+unchanged, now replaces two.} It is worth being precise about what this is not: $0.25$ was not a
+value tuned on evidence that later went stale. It was conservatism with nothing behind it, and the
+soundness argument above shows there was never a regime in which it could pay.
+
+\subsection{Who this affects}
+
+Route decisions depend only on sparsity structure, so a census transfers across precisions and
+across the sibling forks.
+
+\paragraph{SDPLIB: nobody.} Of $92$ problems, \textbf{none} change route. $84$ are decided at
+gate~1, $6$ at gate~2, and the single problem that reaches gate~3 --- \code{truss5} --- has
+$\aggr = \rfill = 1.0$ and goes dense under both rules.
+
+\paragraph{Bootstrap problems: most of them.} On a $221$-instance census, \textbf{167 instances
+across seven structural classes} change dense~$\rightarrow$~sparse. Every one of those $167$ has
+$\aggr \in [0.257, 0.362]$ and $\rfill \in [0.259, 0.367]$: above the old $0.25$, and
+\textbf{not one above $0.40$}. Gate~4 said sparse on all of them.
+
+\subsection{Measured effect}
+
+One representative of \emph{each} of the seven structural classes was timed --- seven timed inputs,
+one per class, not $167$. The classes are complete coverage of the switch set; the timings are
+seven observations.
+
+\begin{center}\small
+\begin{tabular}{rrrrr}
+\toprule
+$m$ & \code{legacy} (dense) & \code{fill} (sparse) & faster & less memory \\
+\midrule
+$2{,}439$  & $1.92$~s / $116$~MB    & $0.61$~s / $50$~MB     & $3.17\times$ & $2.30\times$ \\
+$4{,}489$  & $9.22$~s / $392$~MB    & $3.59$~s / $213$~MB    & $2.57\times$ & $1.84\times$ \\
+$5{,}278$  & $14.50$~s / $519$~MB   & $3.88$~s / $234$~MB    & $3.74\times$ & $2.22\times$ \\
+$6{,}067$  & $22.97$~s / $671$~MB   & $4.50$~s / $277$~MB    & $5.11\times$ & $2.42\times$ \\
+$8{,}359$  & $66.20$~s / $1{,}289$~MB & $15.13$~s / $587$~MB & $4.38\times$ & $2.20\times$ \\
+$10{,}614$ & $150.47$~s / $2{,}032$~MB & $22.36$~s / $831$~MB & $6.73\times$ & $2.45\times$ \\
+$11{,}227$ & $175.81$~s / $2{,}358$~MB & $47.94$~s / $1{,}183$~MB & $3.67\times$ & $1.99\times$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Raw rows: \code{bench/dd-port3-2026-08-24/dd\_fill\_seven\_structures.tsv}.
+
+\subsection{What this evidence does not establish, and where the rest of it comes from}
+
+The table above is a \textbf{fixed four-iteration, per-iteration} experiment. \emph{No
+time-to-solution comparison was performed on \code{dd}}, and none can be: these instances do not
+converge at double-double precision under either tolerance tested (the shipped
+\code{epsilonStar}${}={}$\code{1e-30} and a relaxed \code{1e-20}). A looser parameter choice is a
+different experiment and nothing here rules it out.
+
+The other half of the case comes from the sibling fork. \code{sdpa-gmp-omp} promoted the same
+policy on 2026-08-18 after five review rounds, on the \emph{same seven structures}, measured
+\textbf{at full convergence} ($m{=}6067$: dense $2708$~s against sparse $310$~s), on two
+architectures, at $256$ and $512$ bits, at nine labelled thread points, with no reversal anywhere
+--- and at \emph{one} thread, where sparse still won $2.60$--$3.06\times$, which shows the $0.25$
+was already mis-routing in the serial regime it was calibrated for. Where the dense arm converged,
+phases and iteration counts were equal per pair and the solution vectors agreed to
+$6.3\mathrm{e}{-}38$.
+
+\subsection{Not ``sparse always wins''}
+
+\code{truss5} has an ordered fill of $1.0$ --- a completely dense factor --- and dense is genuinely
+about $1.4\times$ faster there. Both the old and the new rule route it dense. That is the point of
+testing the fill rather than assuming an answer.
+
+\subsection{What the change costs, stated plainly}
+
+\code{SDPA\_BMAT\_MODE} is \textbf{result-changing by design}. Dense and sparse are different
+factorisation routes and follow different iterate trajectories, so results can differ in the last
+digits. Across a $48$-cell harness, $30$ cells differ between routes, while every cell that
+\emph{converges} agrees on the objective. Anyone needing bit-reproducibility against an earlier run
+must keep the mode fixed; \code{SDPA\_BMAT\_MODE=legacy} reproduces the pre-2026-08-24 chooser
+exactly.
+
+\section{Reproducibility: established, not asserted}
+
+\subsection{What is guaranteed}
+
+\begin{itemize}
+\item The assembled Schur complement is \textbf{bit-identical} at any thread count, and across
+      repeated runs at one thread count.
+\item The sparse Cholesky factor is \textbf{bit-identical} at any thread count, by the dependence
+      argument of \S5.2.
+\item A checksum over every scalar of the final \code{xMat}/\code{yVec}/\code{zMat} is identical at
+      $1/2/4/8/24$ threads.
+\item Results are identical between \code{arm64} and \code{x86-64}, given the contraction pin of
+      \S4.
+\end{itemize}
+
+Unpatched upstream has none of these. Threaded, its iteration counts and even its objectives vary
+run to run: \code{control1} ran $69/74/88$ iterations across three repeats at $24$ threads on one
+host and $69/82/109$ at $8$ threads on another, where this fork ran $71/71/71$ on both.
+
+\subsection{Why the printed solution is the wrong thing to compare}
+
+A \code{dd\_real} carries about $32$ significant digits; the printed result fields carry $17$. A
+factor can therefore change without any printed field moving. Every reproducibility claim here is
+made against the \emph{structures} --- the assembled matrix, the finished factor --- and not
+against printed digits.
+
+\subsection{The oracles}
+
+\begin{center}\small
+\begin{tabular}{@{}p{5.6cm}p{7.6cm}@{}}
+\toprule
+variable & what it produces \\
+\midrule
+\code{SDPA\_SPCHOL\_DIGEST}          & fingerprint of the finished factor: records, bytes, 64-bit FNV-1a \\
+\code{SDPA\_SPCHOL\_DIGEST\_DUMP=\emph{file}} & the factor's canonical stream, appended \\
+\code{SDPA\_BMAT\_ASM\_DIGEST}       & the same fingerprint, for the assembled Schur complement \\
+\code{SDPA\_BMAT\_ASM\_DUMP=\emph{file}} & the assembly's canonical stream \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The dumps are the proof-grade comparison: run twice, \code{cmp} the files. A fingerprint is strong
+evidence, not proof, and is described that way wherever it is printed. Both streams carry a length
+frame before every variable-length field, so two different structures cannot serialise to the same
+bytes, and the two streams use different tags so an assembly stream can never compare equal to a
+factor stream.
+
+One operational caveat that cost a full sweep: the dump files are opened in append mode
+(\code{"ab"}), so a comparison harness must \code{rm -f} them before each run or every problem will
+appear to race.
+
+\subsection{Negative controls, and why they are not optional}
+
+A comparison that cannot fail is worse than no comparison, because it reports success. Each oracle
+therefore has a hook that injects the smallest change it must detect, and CI asserts that the hook
+actually changes what it claims to change. These require \code{-DSDPA\_SPCHOL\_TEST\_HOOKS} at
+build time; a release build \emph{refuses} them rather than ignoring them, because a knob that
+silently does nothing misleads whoever set it.
+
+\begin{center}\small
+\begin{tabular}{@{}p{6.1cm}p{7.1cm}@{}}
+\toprule
+hook & what it injects \\
+\midrule
+\code{SDPA\_SPCHOL\_MUTATE=1}    & one ulp into the finished factor \\
+\code{SDPA\_BMAT\_ASM\_MUTATE=1} & one ulp into the assembled matrix \\
+\code{SDPA\_BMAT\_TEST\_BREAK\_INVARIANT=1} & a violation of the $\rfill \ge \aggr$ invariant \\
+\code{SDPA\_BMAT\_TEST\_F2\_STALE=1} & the worst-case stale-$G$ read a since-fixed defect could produce \\
+\code{SDPA\_SPCHOL\_TEAM\_OVERRIDE=\emph{n}} & asks the runtime for $n$ threads, leaving the gates' team alone \\
+\code{SDPA\_SPCHOL\_FAIL\_AT=\emph{i}} & declares pivot $i$ indefinite \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The last two are a different idea from the first four: not negative controls for an oracle, but the
+only way to execute two branches that no input reaches on purpose.
+\code{TEAM\_OVERRIDE=1} is the only route into the ``requested a team and received one thread''
+fallback --- the dispatcher's own \code{team < 2} test exits earlier and by a different path, so
+without the hook that branch is dead to every test --- and CI additionally requires the fallback's
+factor to be byte-identical to the threaded one. \code{FAIL\_AT} makes the failure return from a
+\emph{partly-threaded} factorisation executable, and CI requires that threaded pivots ran first, or
+the test would prove nothing about that path. When it fires, the diagnostic says the failure was
+\textbf{declared}, not measured.
+
+\subsection{Route fixtures}
+
+\code{tests/gen\_route\_fixture.py} generates eight cases straddling the gates and asserts the exact
+route taken under \code{auto}, \code{fill} and with the variable unset. One case, \code{wide}, is
+policy-divergent, and CI fails if it stops diverging --- because the assertion that unset behaves
+like \code{auto} is vacuous unless at least one case can tell the policies apart.
+
+\section{Environment variables}
+
+Two rules hold for every variable below, and are tested in CI rather than merely stated.
+
+\begin{enumerate}
+\item \textbf{A typo is refused, never treated as the default.} \code{SDPA\_SPCHOL\_MODE=Auto} or
+      \code{SDPA\_DD\_MIN\_SPCHOL\_WORK=-5} stops the run with a diagnostic. Silently falling back
+      would let a mistyped variable select the very path the caller was trying to avoid --- and
+      \code{-5} in particular used to be \emph{accepted}, wrapping to
+      $18446744073709551611$, i.e.\ ``never parallel'' while looking configured.
+\item \textbf{Validation happens on every route.} A knob is parsed once per process at a point both
+      the dense and the sparse route reach, so a dense-route problem refuses a malformed value it
+      would never otherwise consult. This fork has been bitten five times by checks placed where
+      only one route could reach them.
+\end{enumerate}
+
+\subsection{Choosing how the Schur complement is stored and factored}
+
+\begin{center}\small
+\begin{tabular}{@{}p{5.1cm}p{5.6cm}l@{}}
+\toprule
+variable & values & changes results? \\
+\midrule
+\code{SDPA\_BMAT\_MODE} & \code{auto} (default) $\cdot$ \code{fill} (synonym) $\cdot$
+  \code{legacy} $\cdot$ \code{dense} $\cdot$ \code{sparse} & \textbf{yes} \\
+\code{SDPA\_BMAT\_MAX\_GB} & positive number of GB & no \\
+\code{SDPA\_BMAT\_LOG} & \code{1} on, \code{0} off & no \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{auto} is the current default policy, which since \textbf{2026-08-24} is the fill-derived rule
+of \S7; \code{fill} is retained as an explicit synonym so opt-in-era scripts keep working;
+\code{legacy} restores the pre-2026-08-24 chooser exactly. \code{dense} and \code{sparse} force a
+route. All values are strictly parsed. \code{SDPA\_BMAT\_LOG=1} prints which gate decided and why.
+
+\code{SDPA\_BMAT\_MAX\_GB} caps the dense allocation and is enforced on \emph{every} route to
+dense, so a problem that would silently need more memory than the machine has fails with a number
+instead. It fails \textbf{closed}: an empty value is an error rather than ``no cap'', because
+\code{SDPA\_BMAT\_MAX\_GB="\$TYPO"} is the ordinary way an empty value reaches a job script, and
+treating it as no-cap would fail \emph{open} on a safety limit.
+
+\paragraph{Available memory is reported, never acted on.} With \code{SDPA\_BMAT\_LOG=1}, and in the
+message a \code{SDPA\_BMAT\_MAX\_GB} refusal prints, the dense requirement is shown next to what the
+machine has free, so ``needs 21 GB'' can be read against something. Nothing branches on it, and CI
+asserts that nothing does: a route chosen from free memory would be a route that changes with the
+machine, which is the opposite of what this fork guarantees. The figure is Linux-only
+(\code{MemAvailable} from \code{/proc/meminfo}; elsewhere the line says it is not readable rather
+than guessing), and it reports the \emph{host}, so inside a memory cgroup it is an upper bound.
+
+\subsection{Threading the sparse Cholesky}
+
+\begin{center}\small
+\begin{tabular}{@{}p{5.1cm}p{5.6cm}l@{}}
+\toprule
+variable & values & changes results? \\
+\midrule
+\code{SDPA\_SPCHOL\_MODE} & \code{auto} (default) $\cdot$ \code{serial} $\cdot$ \code{force}
+  $\cdot$ \code{legacy} & no \\
+\code{SDPA\_DD\_MIN\_SPCHOL\_WORK}  & integer, default \textbf{10000} & no \\
+\code{SDPA\_DD\_MIN\_SPCHOL\_WIDTH} & integer, default \textbf{8} & no \\
+\code{SDPA\_DD\_MIN\_SPCHOL\_TOTAL} & integer, default \textbf{0} (pass-through) & no \\
+\code{SDPA\_SPCHOL\_LOG} & \code{1} on, \code{0} off & no \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{legacy} runs an independent transcription of the pre-refactor expression. It exists as an
+\textbf{oracle}: \code{serial} and the threaded path share their inner kernel, so comparing those
+two cannot detect a bug in the shared kernel, whereas \code{legacy} can.
+
+\code{force} \textbf{forces or fails} --- in a build without OpenMP it is refused rather than
+silently running serial, so a benchmark cannot believe it measured the threaded path when it
+measured the other one.
+
+The gates were calibrated on \code{dd}, on two architectures (i9-13900K/$24$ cores and Apple M1
+Max/$10$ cores). They are runtime-overridable precisely so a machine that disagrees can be
+accommodated without a rebuild.
+
+\subsection{Threading the sparse \texorpdfstring{$\bMat$}{bMat} assembly}
+
+\begin{center}\small
+\begin{tabular}{@{}p{5.1cm}p{5.6cm}l@{}}
+\toprule
+variable & values & changes results? \\
+\midrule
+\code{SDPA\_BMAT\_ASM\_MODE} & \code{auto} (default) $\cdot$ \code{serial} $\cdot$ \code{parallel} & no \\
+\code{SDPA\_BMAT\_ASM\_MIN\_PAIRS} & integer, default \textbf{8000} & no \\
+\code{SDPA\_BMAT\_ASM\_SCRATCH\_MB} & integer MB, default \textbf{4096} & no \\
+\code{SDPA\_BMAT\_ASM\_LOG} & \code{1} & no \\
+\code{SDPA\_BMAT\_ASM\_PROFILE} & \code{1} & no \\
+\code{SDPA\_BMAT\_ASM\_CENSUS} & \code{1} & no \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\code{SDPA\_BMAT\_ASM\_SCRATCH\_MB} is a \textbf{production safety control}, not observability: each
+worker beyond the first needs two dense matrices of the largest block's order. If the budget admits
+fewer workers than requested, the team shrinks; it never silently exceeds the budget.
+
+\code{SDPA\_BMAT\_ASM\_MIN\_PAIRS = 8000} was calibrated on two architectures. Below roughly
+$5{,}000$ pairs threading loses --- the fork/join costs more than the work --- and above roughly
+$15{,}000$ it wins by $8$--$10\times$. The gate is a \textbf{proxy}: pair count does not fully
+determine the work, since a group's cost also scales with its block dimension, so a problem near the
+boundary may benefit from overriding it. A work-based replacement was attempted and the result was
+\emph{negative}: no static pair-count threshold is safe on both calibration machines. That is
+recorded here rather than quietly dropped.
+
+\subsection{Profiling and census}
+
+\code{SDPA\_BMAT\_ASM\_PROFILE=1} splits the \code{Make bMat} phase into zeroing, SDP assembly and
+LP assembly. \code{SDPA\_SOLVE\_PROFILE=1} splits the triangular solve into its forward and backward
+passes. Both are reported in the phase table and cost a few clock reads per iteration when off.
+
+\code{SDPA\_BMAT\_ASM\_CENSUS=1} reports, per SDP block: pair count, group count, largest group, the
+formula mix, and how many pairs consume the F2/dense-$A_j$ path. Useful for judging whether a
+problem can balance across threads before trying.
+
+\section{Exit status}
+
+Upstream exits $0$ on \emph{every} path, including fatal errors, so a crashed run is
+indistinguishable from a solved one in any harness that checks exit codes. This fork distinguishes
+them.
+
+{\small
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{10.4cm}>{\raggedright\arraybackslash}p{4.6cm}@{}}
+\toprule
+outcome & exit \\
+\midrule
+\endhead
+solver ran to any stopping condition (\code{pdOPT}, \code{pdFEAS}, \code{pFEAS}, \code{dFEAS},
+  \code{pdINF}, \code{pINF\_dFEAS}, \code{pFEAS\_dINF}, \code{pUNBD}, \code{dUNBD},
+  \code{noINFO}) & \textbf{0} \\[2pt]
+iteration limit reached & \textbf{0} \\[2pt]
+infeasibility / unboundedness detected & \textbf{0} \\[2pt]
+malformed input, unreadable file, invalid parameter & \textbf{1}, with a diagnostic
+  (line-numbered for data files) \\[2pt]
+numerical failure with nothing valid to print --- no iteration completed, or the updated $X$/$Z$
+  left the cone \emph{and the rollback could not be refactored} & \textbf{2},
+  \code{solveStatus = FAILURE}, no solution section \\[2pt]
+recoverable late failure after $k$ good iterations --- a Schur factorisation failure, or an
+  $X$/$Z$ update that left the cone and \emph{was} rolled back; the last valid iterate is printed
+  and labelled & \textbf{3}, \code{solveStatus = PARTIAL},
+  \code{failureIteration = }$k$ \\
+\bottomrule
+\end{longtable}}
+
+Infeasibility and the iteration limit are valid mathematical results, not errors, and are reported
+as such.
+
+\section{What is not established}
+
+Stated positively so that nobody has to infer it from silence.
+
+\begin{itemize}
+\item \textbf{No time-to-solution comparison exists for the large sparse problems.} \code{dE3} and
+      \code{dE4} do not converge at double-double precision under either tolerance tested
+      (\code{1e-30} shipped, \code{1e-20} relaxed). Every figure quoted for them is
+      \emph{per-iteration cost over a fixed four-iteration budget}. A looser parameter choice is a
+      different experiment.
+\item \textbf{The route census is structural, the timings are seven observations.} Seven
+      representatives cover all seven classes containing the $167$ switch instances; $167$
+      instances were not timed.
+\item \textbf{The assembly work gate has no principled replacement yet.} The attempt to derive one
+      returned a negative result on two machines.
+\item \textbf{The OpenMP work thresholds carry a precision caveat.} They were calibrated at
+      double-double. The sibling \code{gmp} fork inherits the mechanism but would need them
+      re-measured at $256$ bits.
+\item \textbf{Short cells are quoted to two significant figures on purpose.} The $24$-thread
+      \code{dE4} cell spreads $8.2\%$ across nine runs in three campaigns ($6.234$--$6.761$~s), and
+      the $24$-thread \code{dE3} sparse cell spreads $12\%$ across six runs. Ratios derived from
+      them are ``about $7.2\times$'' and ``about $5\times$''; every earlier revision that quoted
+      three figures had to move the number at the next re-measurement.
+\item \textbf{Threaded upstream is nondeterministic}, so fork-versus-upstream figures are observed
+      end-to-end speedups rather than strictly same-trajectory comparisons.
+\end{itemize}
+
+\section{Sources}
+
+\begin{itemize}
+\item Upstream: \url{https://github.com/nakatamaho/sdpa-dd} at \code{6eaad8d9}. The base commit is
+      not an ancestor of this repository's history; fetch it explicitly to diff.
+\item This fork: \url{https://github.com/Canonical111/sdpa-dd-omp}
+\item Sibling fork, arbitrary precision, where the factorisation policy was derived and measured at
+      full convergence: \url{https://github.com/Canonical111/sdpa-gmp-omp}
+\item Benchmark tables and methodology: \code{BENCHMARKS.md}; raw per-repeat rows and per-file
+      provenance under \code{bench/}, with \code{bench/validate.py} as an integrity check.
+\item Build and verification: \code{INSTALL.md}.
+\end{itemize}
+
+Every modified or added source file carries an in-file, dated change notice naming its own licence:
+GPLv2 \S2a for the SDPA sources, and the two-clause BSD terms for \code{mplapack/}, which carries no
+GNU licence at all. The complete, always-current list of changes is a diff against upstream; an
+enumeration went stale twice and is deliberately not repeated here. \code{git log} carries the
+rationale per change.
+
+\end{document}

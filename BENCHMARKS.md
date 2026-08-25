@@ -3,6 +3,37 @@
 Fork base: upstream `6eaad8d9`. Comparison points: **sdpa-dd 7.1.2** (the 2009 release,
 single-threaded by construction) and **upstream master** built with OpenMP.
 
+This is the full dossier. For the headline figures and what they mean, start at
+[README.md](README.md); for the mechanisms behind them, [doc/technical.pdf](doc/technical.pdf).
+
+## Host key
+
+The `machine` ids recorded in the raw TSVs are internal hostnames; this is the hardware behind
+them. Every row in every raw file carries one of these ids.
+
+| TSV id | hardware | physical cores | notes |
+|---|---|---:|---|
+| `pi-i9-13900k` | workstation, Intel i9-13900K (hybrid) | 24 = 8P + 16E | P-cores 5.5 GHz, E-cores 4.3 GHz |
+| `thanos-epyc7232p` | workstation, AMD EPYC 7232P | 8 | |
+| `mac-m1max` | laptop, Apple M1 Max (hybrid) | 8P + 2E | no per-process affinity on macOS |
+
+## Which table should I use?
+
+| you want | read |
+|---|---|
+| the fork-vs-upstream comparison on the path that actually differs | [The large sparse problems](#the-large-sparse-problems--where-upstream-gains-almost-nothing) |
+| broad coverage across 20 SDPLIB problems on three machines | the three per-host sections below |
+| what happens on problems too small to thread | [Small problems](#small-problems--where-upstreams-threading-is-actively-harmful) |
+| evidence that threading does not change the answer | [Reproducibility evidence](#reproducibility-evidence) |
+| the arm64-vs-x86-64 question | [The fork columns pin floating-point contraction](#the-fork-columns-pin-floating-point-contraction-and-now-match-x86-64-exactly) |
+
+**Two things to keep straight when reading any table here.** First, the large sparse rows
+(`dE3`, `dE4`) are **fixed four-iteration budgets, not times to solution** — neither problem
+converges at double-double precision under either tolerance tested. Second, every SDPLIB problem
+takes a *dense* `bMat` and therefore never reaches the threaded sparse Cholesky or the threaded
+sparse assembly, which is where the largest differences live; the SDPLIB tables understate the fork
+for that reason, and no rerun fixes it.
+
 ## Methodology
 
 External wall-clock seconds, **median of 3 repeats**, spread reported where it exceeds

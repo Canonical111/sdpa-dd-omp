@@ -482,7 +482,8 @@ double bmat_max_gb() {
 // "0" means OFF. Until now this knob was tested for PRESENCE only, so the documented way to
 // turn the route log off turned it on -- the identical defect that was found and fixed in
 // SDPA_SPCHOL_LOG, still present in its sibling because the fix was applied to one call site
-// rather than to the pattern. RUNTIME.md already documented `1` here; the code now agrees.
+// rather than to the pattern. The runtime reference already documented `1` here; the code now
+// agrees. (That reference was RUNTIME.md until 2026-08-25; it is now doc/technical.tex, sec. 9.)
 bool bmat_log_wanted() {
     const char *e = getenv("SDPA_BMAT_LOG");
     return (e != NULL && e[0] != '\0' && strcmp(e, "0") != 0);

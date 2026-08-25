@@ -111,7 +111,11 @@ done
 # documents describe something a reader cannot download. A v7.1.3-omp.4 tag is deferred pending
 # review, and until it exists the divergence must be stated rather than left for the reader to
 # discover. When v.4 IS cut, this rule should be deleted along with the notices it guards.
-if current_claims INSTALL.md | grep -qE '382\.0 MB|277\.5 MB'; then
+# Matches both the exact figures ("382.0 MB") and the rounded ones the thread-count table carries
+# ("382 MB"). The rule fired on the exact form until 2026-08-25, when the documentation restructure
+# moved the exact figures into doc/technical.tex and left the table's rounded ones in INSTALL --
+# which would have made the rule, and its --self-test probe, silently dead. Both forms now count.
+if current_claims INSTALL.md | grep -qE '382(\.0)? MB|277(\.5)? MB'; then
   grep -qF "not the latest release" INSTALL.md \
     || bad "INSTALL.md quotes main-only memory figures without saying they are not in the release"
 fi

@@ -1,117 +1,208 @@
 # sdpa-dd-omp
 
-OpenMP-threaded, reproducible fork of sdpa-dd. ("-omp" and not "parallel": SDPARA is the
-SDPA group's own MPI solver, and "mp" already means multiprecision in this family.)
+An OpenMP-threaded, reproducible fork of **sdpa-dd**, a semidefinite-programming solver that works
+in double-double arithmetic — roughly 32 significant digits, carried as an unevaluated sum of two
+IEEE doubles.
 
-Fork of [nakatamaho/sdpa-dd](https://github.com/nakatamaho/sdpa-dd) at commit
-`6eaad8d9` (the original upstream README is preserved as
-[README-UPSTREAM.md](README-UPSTREAM.md)), carrying four patches that fix performance and
-reproducibility regressions. **Build it:** [INSTALL.md](INSTALL.md). The issues were reported to the upstream maintainer and have not
-been adopted there; this fork exists so the fixes are usable.
+Upstream builds with OpenMP, but threading it as shipped is not merely unprofitable. On small
+problems more cores make it monotonically **slower** — 24.5× slower on 24 cores than on one, on a
+user's m=16 input. On large sparse problems it threads *neither* of the two regions that dominate
+the runtime, so 24 cores buy it **4.9%**. And its threaded runs are not reproducible: one SDPLIB
+problem ran 69, 74 and 88 interior-point iterations across three identical invocations.
 
-## The original four-patch port
+This fork threads the regions that actually dominate, makes threaded results bit-identical at any
+thread count, fixes a decimal reader that silently turned high-precision input into NaN, and
+re-derives the rule that decides how the Schur complement is factored.
 
-| commit | change |
+Fork of [nakatamaho/sdpa-dd](https://github.com/nakatamaho/sdpa-dd) at `6eaad8d9` — upstream's own
+README is preserved as [README-UPSTREAM.md](README-UPSTREAM.md). Reported upstream; not adopted
+there, which is why this fork exists.
+
+| | |
 |---|---|
-| 1 | restore netlib dgemm's zero-skip in `Rgemm_NN/NT_omp` — dropped in mplapack 2.0.1, up to 2× serial regression |
-| 2 | gate OpenMP on work / width / nesting; run `Rdot` serially — up to 13× on small problems, removes a nondeterminism |
-| 3 | thread the Schur-complement (`bMat`) constraint loop — the dominant gain |
-| 4 | report the reduced per-formula timers as worker-seconds, not elapsed time |
-
-The four patches above are the original port. Two later changes matter as much:
-
-**High-precision input is read correctly.** QD's decimal converter overflows internally at 309
-or more mantissa digits and *returns success while producing NaN*, so a 600-digit spelling of an
-ordinary-magnitude number entered the SDP matrices as NaN and surfaced as a bogus
-`cholesky miss condition` at iteration 0 — the solver reporting an infeasible problem when the
-problem was fine. On a user's 600-digit input, upstream terminates after **0 iterations** with
-`objValPrimal = -0.0`; this fork reaches **pdOPT in 43 iterations**. Truncating that same input to
-**45 significant digits** — beyond double-double's ~32-digit resolution, and far below the
-converter's ~309-digit limit — makes upstream solve it correctly, which isolates the cause to
-token length. (Shortening the token is the only thing that changes: this fork's answers on the
-600-, 45- and 30-digit inputs agree to 10 significant digits, and a change that small cannot turn
-a NaN into a correct solve.)
-The reader now validates full decimal syntax, keeps the original conversion path for mantissas up
-to 308 digits (ordinary inputs stay bit-identical), normalises longer ones with the exponent
-preserved, and checks parser status *and* finiteness rather than letting NaN reach the solver.
-
-**Threading no longer makes small problems slower.** Upstream enters its parallel regions
-regardless of problem size, so on small inputs the fork/join costs more than the work it
-distributes. On a user's `max_custom_scaled.dat-s` (m=16) upstream degrades monotonically at every
-thread count, ending **24.5× slower on 24 cores than on 1**; this fork is flat to four decimal
-places, because the work/width gate declines to thread what cannot repay itself. See
-[BENCHMARKS.md](BENCHMARKS.md).
-
-Beyond those: a ten-item correctness batch (exit statuses, container ownership, input bounds, an
-uninitialised-read fix), threaded Cholesky panel kernels and X/Z inverse-Cholesky triangulars
-behind measured work gates, hardware FMA for the bundled QD on aarch64, and the FP-contraction pin
-described below.
-
-Since then the two remaining serial regions on the large-sparse path have been threaded: the
-**sparse Schur-complement Cholesky** and the **sparse Schur-complement assembly**. On the 24-core
-i9-13900K benchmark host, under a fixed four-iteration protocol, dE4 (m=7401) runs in about
-**6.4 s** against **46.329 s** for the historical unmodified-fork baseline measured the same way —
-about a **7.2×** improvement. The factor and the assembled matrix are both **bit-identical at any
-thread count, and across repeated runs at one thread count**, verified by comparing the structures
-themselves rather than the printed solution. Every runtime knob is documented in
-[RUNTIME.md](RUNTIME.md).
-
-> **Why "about", and not three significant figures.** That cell is short and jittery. Three
-> independent campaigns of three repeats each — nine runs of the same protocol on the same host —
-> span **6.234–6.761 s**, an **8.2%** spread, giving campaign ratios of 7.13×, 7.24× and 7.25×.
-> The pooled median of all nine is 6.428 s, i.e. **7.21×**. Quoting any single campaign's median to
-> three figures would be reading precision the measurement does not have; earlier revisions of this
-> file did exactly that, and the number moved every time it was re-measured.
-
-These are fixed-budget comparisons, not time-to-convergence results. Raw rows and full provenance:
-[bench/dd-port3-2026-08-24/dd_final_headline_postfix.tsv](bench/dd-port3-2026-08-24/dd_final_headline_postfix.tsv)
-and [dd_current_scaling.tsv](bench/dd-port3-2026-08-24/dd_current_scaling.tsv).
+| **Build and run it** | [INSTALL.md](INSTALL.md) — build, verify, choose a thread count, troubleshoot |
+| **Why it works this way** | [doc/technical.pdf](doc/technical.pdf) — mechanisms, the derivation behind the factorisation rule, every environment variable, the exit-status contract, and what is *not* established |
+| **Full benchmark tables** | [BENCHMARKS.md](BENCHMARKS.md), raw per-repeat data in [`bench/`](bench/) |
 
 > **Do not use `v7.1.3-omp.2`.** It contains a data race in the threaded assembly: on a problem
-> whose **sparse assembly is threaded** *and* whose SDP blocks share Schur-complement entries —
-> SDPLIB `truss6` among them, at default settings — it returns a different answer on nearly every
-> run. (A sparse-routed problem below the assembly's threading gate is unaffected.)
->
+> whose sparse assembly is threaded *and* whose SDP blocks share Schur-complement entries — SDPLIB
+> `truss6` among them, at default settings — it returns a different answer on nearly every run.
 > **Fixed in [`v7.1.3-omp.3`](https://github.com/Canonical111/sdpa-dd-omp/releases/tag/v7.1.3-omp.3)**
-> (commit `e660d19`; archive sha256 `290a038e…`). The check that catches the defect is in
-> [INSTALL.md](INSTALL.md#the-property-worth-checking-yourself) and in CI.
+> (commit `e660d19`; archive sha256 `290a038e…`). The check that catches it is in
+> [INSTALL.md](INSTALL.md#the-property-worth-checking-yourself) and in CI. The full account —
+> including why every existing test passed on a racing binary — is
+> [doc/technical.pdf](doc/technical.pdf) §6.
 
 > ### These documents describe `main`, which is ahead of the latest release
 >
-> `v7.1.3-omp.3` is the newest tagged release and is **correct** — it has the race fix. `main`
-> carries **two** further changes to solver code, with different consequences:
+> `v7.1.3-omp.3` is the newest tag and is **correct** — it has the race fix. `main` carries two
+> further changes. One is invisible except in memory (the overlap map uses two bits per Schur entry
+> instead of one `int`: `dE4` 382.0 MB against 405.8 MB, `dE3` 277.5 MB against 294.2 MB). The
+> other **changes results on affected problems**: the fill-derived route policy is now the default,
+> so `dE3` routes sparse instead of dense — 4.5 s / 277 MB at 24 threads against 22.6 s / 671 MB —
+> and its trajectory differs in the last digits. No SDPLIB problem changes route. `dE4` is
+> unaffected.
 >
-> **1. The overlap map uses two bits per Schur entry instead of one `int`** (`sdpa_newton.cpp`).
-> Answers, routes and timings are unchanged; only **peak memory on sparse-route problems** moves —
-> `dE4` 382.0 MB on `main` against 405.8 MB in the release, `dE3` 277.5 MB against 294.2 MB.
->
-> **2. The fill-derived route policy is now the default** (`sdpa_chordal.cpp`). This one **is
-> result-changing**, and on some problems it is a large change rather than a subtle one:
->
-> | | `v7.1.3-omp.3` | `main` |
-> |---|---|---|
-> | default route on `dE3` | dense | **sparse** |
-> | `dE3` at 24 threads | 22.6 s / 671 MB | **4.5 s / 277 MB** |
-> | trajectory on affected problems | — | differs in the last digits |
-> | `dE4` | sparse | sparse (unchanged) |
-> | SDPLIB | — | **no problem changes route** |
->
-> `SDPA_BMAT_MODE=legacy` on `main` reproduces the release's routing exactly. §"Route selection" in
-> [INSTALL.md](INSTALL.md) has the reasoning and the measurements.
->
-> **So the two builds are not interchangeable on affected problems.** Wherever these documents
-> quote a route, a memory figure or a `dE3` timing, it is `main`'s. Build from `main` to get what
-> is described here; take `v7.1.3-omp.3` for a tagged release and expect the older routing and
-> about 6% more peak RSS. A `v7.1.3-omp.4` tag is deliberately deferred pending review.
+> `SDPA_BMAT_MODE=legacy` on `main` reproduces the release's routing exactly. Wherever these
+> documents quote a route, a memory figure or a `dE3` timing, it is `main`'s. A `v7.1.3-omp.4` tag
+> is deliberately deferred pending review.
 
-Each change carries its evidence in its commit message; [BENCHMARKS.md](BENCHMARKS.md) holds the
-regenerated tables.
+## What was improved
 
-Every modified or added source file carries an in-file, dated change notice naming its own
-licence: GPLv2 §2a for the SDPA sources, and the 2-clause BSD terms for `mplapack/`, which
-carries no GNU licence at all. The
-complete, always-current list is a diff against upstream — an enumeration here went stale twice
-and is deliberately not repeated. `git log` has the rationale per change.
+**Threading the regions that dominate.** The `bMat` constraint loop, the **sparse Schur-complement
+Cholesky**, the **sparse Schur-complement assembly**, the Cholesky panel kernels and the X/Z
+inverse-Cholesky triangulars are all threaded here. The last two of those five are the ones that
+matter on large problems and are entirely serial upstream — which is the whole explanation for the
+`dE4` row in the tables below.
+
+Both the assembled Schur complement and the finished Cholesky factor are **bit-identical at any
+thread count by construction**, not by luck: for a fixed pivot each worker owns one destination
+row, every read comes from the pivot row, and no sum is ever reassociated. The backward triangular
+solve is the one region deliberately left serial — it *is* a reassociated sum, and unlike
+`sdpa-gmp` there is no runtime precision here to widen an accumulator with, so threading it would
+trade reproducibility for a fraction of one phase.
+
+**Threading no longer makes small problems slower.** Upstream enters its parallel regions
+regardless of problem size — it has a threshold mechanism, but it is disabled behind `if (0)` and
+cannot simply be switched on, because the `_ref` bodies it dispatches to are absent and would not
+link. On a user's `max_custom_scaled.dat-s` (m=16) upstream degrades at *every* thread count,
+ending **24.5× slower on 24 cores than on 1**; this fork is flat to four decimal places, because
+the work/width gate declines to thread what cannot repay itself.
+
+**High-precision input is read correctly.** QD's decimal converter overflows internally at 309 or
+more mantissa digits and *returns success while producing NaN*, so a 600-digit spelling of an
+ordinary number entered the SDP matrices as NaN and surfaced as a bogus `cholesky miss condition`
+at iteration 0 — the solver reporting an infeasible problem when the problem was fine. On a user's
+600-digit input, upstream terminates after **0 iterations**; this fork reaches **pdOPT in 43
+iterations**. Truncating that same input to 45 digits makes *upstream* solve it correctly, which
+isolates the cause to token length rather than to arithmetic.
+
+**The same answers on arm64 and x86-64.** GCC and clang default to `-ffp-contract=fast`, and
+`dd_real` arithmetic is header-inline — so *the compiler* decides whether the compensation terms of
+the double-double algorithms get folded into an FMA, and folding there deletes the very rounding
+error `two_sum` exists to capture. Baseline x86-64 has no FMA to fold into and arm64 does, so the
+two platforms ran different arithmetic. This fork pins `-ffp-contract=off` by default across every
+SDPA, `mplapack` and bundled-QD translation unit; an M1 build then matches the x86-64 reference on
+**20 of 20** problems. Hardware FMA is untouched (`__builtin_fma` still compiles to one `fmsub`),
+x86-64 object code is byte-identical with and without the flag, and the cost is ~1% per iteration.
+
+**Reproducibility, measured rather than asserted.** A checksum over every scalar of the final
+`xMat`/`yVec`/`zMat` is identical at 1/2/4/8/24 threads, and CI compares the *assembled matrix and
+the factor themselves* — not the printed solution, which carries 17 digits where a `dd_real`
+carries 32, so a factor can change without any printed field moving. Repeated runs at **one**
+thread count are checked too; that is the check a race passes the between-thread-count comparison
+by moving both sides, and its absence is exactly what let `v7.1.3-omp.2` ship.
+
+**A re-derived factorisation choice (2026-08-24).** Four gates decide dense vs sparse for the Schur
+complement. Gate 3 is a cheap pre-screen on the *aggregate* sparsity pattern; gate 4 is the real
+test, on the *ordered fill*. Gate 3 screened at 0.25·m² while gate 4 rejected at 0.40·m² — so the
+pre-screen was the stricter test and overruled the real one. Demoting gate 3 to gate 4's own
+constant is provable rather than optimistic: symbolic factorisation only *adds* entries, so
+aggregate > F implies fill > F, which makes 0.40 the **largest sound cutoff** and 0.25 conservatism
+with nothing behind it. **One tunable replaces two.** No SDPLIB problem changes route; on a
+221-instance bootstrap census, 167 stop taking a route that cost 2.6–6.7× in time and 1.8–2.5× in
+memory. Not "sparse always wins": `truss5` has an ordered fill of 1.0 and dense is genuinely faster
+there — both rules send it dense, which is the point of testing fill rather than assuming.
+
+**Two inherited kernel defects, fixed.** `mplapack` 2.0.1 dropped netlib `dgemm`'s zero-skip guard,
+so multiplying by zero still paid full multiprecision cost — restored in `Rgemm_NN_omp.cpp` and
+`Rgemm_NT_omp.cpp`, worth up to 2× serial. And the reduced per-formula timers reported
+worker-seconds where elapsed time was expected, so a region looked *more* expensive the more it was
+parallelised.
+
+**Reporting that does not lie.** Upstream exits 0 on every path, including fatal errors, so a
+crashed run is indistinguishable from a solved one in any harness that checks exit codes. This fork
+distinguishes them, and reports a recoverable numerical failure as `solveStatus = PARTIAL` naming
+the failing iteration. The full contract is in [doc/technical.pdf](doc/technical.pdf) §10.
+
+## The benchmarks
+
+Three views, and they measure different things:
+
+- **the large sparse problems** — where the difference actually lives, because they are the only
+  ones that reach the threaded sparse Cholesky and assembly;
+- **20 SDPLIB problems on three machines** — the broad-coverage set, but every one of them takes a
+  dense `bMat` and so misses the path above entirely;
+- **small problems** — where upstream's threading is actively harmful and this fork's gating is the
+  whole story.
+
+[BENCHMARKS.md](BENCHMARKS.md) is the full dossier and says which table to use for what.
+
+### The large sparse problems, against upstream
+
+Measured 2026-08-25 on current `main` against upstream `6eaad8d` — the commit this fork branched
+from and still its `master` — each rebuilt from its own recipe, i9-13900K (24 physical cores),
+**medians of three**, the two builds interleaved cell by cell. Both problems take the fork's
+**default** route:
+
+| | upstream, 1 thread | upstream, 24 threads | **this fork, 24 threads** | fork vs upstream |
+|---|---:|---:|---:|---:|
+| `dE4` (m=7401, routes sparse) | 49.20 s | 46.92 s — **1.05×** | **6.42 s** | **≈7.3×** |
+| `dE3` (m=6067, routes sparse since 2026-08-24) | 434.62 s | 60.80 s — 7.15× | **4.57 s** | **≈13×** |
+
+`dE4` is the striking column: **24 cores buy upstream 4.9%**, because it routes sparse and upstream
+threads neither the sparse Schur-complement Cholesky nor its assembly. Both are threaded here.
+
+> **The clearest number is at *one* thread**, where no parallelism enters on either side. On `dE3`
+> the fork takes 31.33 s against upstream's 434.62 s — about **13.9×** — and that factors cleanly:
+> **2.47×** from better serial code running the *same* dense algorithm (176.29 s with
+> `SDPA_BMAT_MODE=legacy`), then **5.62×** from switching to the sparse algorithm. It was invisible
+> before the route promotion, because the fork used to default to the same dense route upstream
+> takes, so a default-vs-default comparison was measuring two implementations of one algorithm.
+>
+> The honest counterweight: the fork's own 1→24 **scaling ratio** on `dE3` *fell*, 7.73× → 6.86×.
+> Nothing regressed — the sparse route is so much faster at one thread that there is less left for
+> threads to recover. Absolute time improved ~5× at every thread count while the scaling ratio got
+> worse; quoting either alone would mislead.
+>
+> The 24-thread advantages are given to two figures because those cells are short (4–6 s) and run
+> to 6.7–7.4% spread. The 1-thread cells are exact to 0.1%.
+
+Against this fork's own historical baseline, measured the same way under a fixed four-iteration
+protocol, `dE4` runs in about **6.4 s** against **46.329 s** for the unmodified fork —
+about a **7.2×** improvement.
+
+> **Why "about", and not three significant figures.** That cell is short and jittery. Three
+> independent campaigns of three repeats each — nine runs of the same protocol on the same host —
+> span **6.234–6.761 s**, an **8.2%** spread, giving campaign ratios of 7.13×, 7.24× and 7.25×. The
+> pooled median of all nine is 6.428 s, i.e. **7.21×**. Quoting any single campaign's median to
+> three figures would be reading precision the measurement does not have; earlier revisions of this
+> file did exactly that, and the number moved every time it was re-measured.
+
+These are **fixed-budget comparisons, not time-to-convergence results** — neither problem converges
+at double-double precision under either tolerance tested (the shipped `epsilonStar=1e-30` and a
+relaxed `1e-20`). Raw rows and full provenance:
+[bench/dd-port3-2026-08-24/](bench/dd-port3-2026-08-24/).
+
+### 20 SDPLIB problems (m = 21…1106), three machines
+
+External wall clock, median of 3 pinned repeats. The headline is quoted **per iteration** — because
+the FP-contraction pin changed iteration counts on 12 of the 20 problems, and a wall-clock ratio
+across differing iteration counts mixes speed with path length.
+
+| | EPYC 7232P (8 cores) | i9-13900K (24 cores) | M1 Max (8P+2E) |
+|---|---:|---:|---:|
+| sdpa-dd 7.1.2 (2009), single-threaded | 1107.3 s | 309.6 s | 360.0 s |
+| upstream master, threaded, at its best | 537.8 s | 136.7 s | 112.4 s |
+| **this fork**, at its best | **292.0 s** @8 thr | **58.8 s** @24 thr | **44.9 s** @8 thr |
+| **vs sdpa-dd 7.1.2, per iteration** | **3.82×** | **5.13×** | **7.78×** |
+
+The per-iteration row is the one to quote; the wall-clock rows above it are given because they are
+what a user actually waits for, but a ratio between them mixes speed with path length. Per-machine
+detail, per-problem rows and the iteration counts are in [BENCHMARKS.md](BENCHMARKS.md).
+
+**Threaded upstream is nondeterministic** — `control1` across three repeats: 69/74/88 iterations at
+24 threads on the i9, 69/82/109 at 8 threads on the EPYC, where this fork runs 71/71/71 on both —
+so the vs-upstream figures are observed end-to-end speedups rather than strictly same-trajectory
+comparisons.
+
+### Small problems
+
+Upstream scales **negatively**: 11× slower on `control1` and 3.3× slower on `truss5` at 24 threads
+than at 1. This fork's work gating keeps `control1` flat to four decimal places. Full curves in
+[BENCHMARKS.md](BENCHMARKS.md).
+
+## Verifying the base commit
 
 The upstream base commit is not an ancestor of this repository's history, so fetch it first; this
 works from a fresh clone:
@@ -122,169 +213,13 @@ git fetch --depth=1 upstream 6eaad8d9abff929bf8abc55ea166cbb2b09d07df
 git diff --stat 6eaad8d9abff929bf8abc55ea166cbb2b09d07df..HEAD
 ```
 
-## Measured results
-
-20 SDPLIB problems (m = 21…1106), external wall clock, median of 3 pinned repeats:
-
-<details>
-<summary><b>Historical: the 2026-08-02 release campaign — superseded, click to expand</b></summary>
-
-These are the numbers from the first release campaign, before the threading and FP-contraction
-work. They are kept for the record and are **not** current; the current figures are below and in
-[BENCHMARKS.md](BENCHMARKS.md).
-
-| | EPYC 7232P (8 cores) | i9-13900K (24 cores) | M1 Max (8P+2E) |
-|---|---|---|---|
-| sdpa-dd 7.1.2 (2009) | 1107.3 s | 309.6 s | 360.0 s |
-| upstream master, threaded | 537.8 s | 136.7 s | 112.4 s |
-| **this fork** (2026-08-02 campaign) | **292.0 s** | **58.8 s** | **86.0 s** |
-| vs upstream master (end-to-end) | **1.84×** | **2.33×** | **1.31×** |
-
-Serial upstream and optimized trajectories matched on 20/20 problems, on all three machines, in
-that campaign (pre-contraction-pin).
-
-</details>
-
-**Current, on the same 20-problem set.** The M1 Max column above reads 86.0 s; that same column is
-now **44.9 s**, and the headline is quoted **per iteration** — **7.78× against sdpa-dd 7.1.2** —
-because the FP-contraction pin changed iteration counts on 12 of the 20 problems, and a wall-clock
-ratio across differing iteration counts mixes speed with path length. Per-machine detail, with the
-trajectory qualifications, is in [BENCHMARKS.md](BENCHMARKS.md).
-
-**On the large sparse problems the gap is much wider, because upstream's threading does not
-reach them at all.**
-
-Measured 2026-08-25 on current `main` against upstream `6eaad8d` — the commit this fork branched
-from and still its `master` — each rebuilt from its own recipe, i9-13900K, **medians of three**,
-the two builds interleaved cell by cell. Both problems take the fork's **default** route:
-
-| | upstream, 1 thread | upstream, 24 threads | **this fork, 24 threads** | fork vs upstream |
-|---|---:|---:|---:|---:|
-| `dE4` (m=7401, routes sparse) | 49.20 s | 46.92 s — **1.05×** | **6.42 s — 7.25×** | **≈7.3×** |
-| `dE3` (m=6067, routes sparse since 2026-08-24) | 434.62 s | 60.80 s — 7.15× | **4.57 s** | **≈13×** |
-
-> **The clearest number here is at *one* thread.** On `dE3` the fork takes 31.33 s against
-> upstream's 434.62 s — about **13.9×**, before any threading enters. That gap is the *route*, not
-> the parallelism, and it was invisible until the route promotion, because the fork used to default
-> to the same dense route upstream takes.
->
-> The honest counterweight: the fork's own 1→24 **scaling ratio** on `dE3` *fell*, 7.73× → 6.86×.
-> Nothing regressed — the sparse route is so much faster at one thread that there is less left for
-> threads to recover. Absolute time improved ~5× at every thread count while the scaling ratio got
-> worse; quoting either alone would mislead.
->
-> The 24-thread advantages are given to two figures because those cells are short (4–6 s) and run
-> to 6.7–7.4% spread. The 1-thread cells are exact to 0.1%.
-
-`dE4` is the striking column: **24 cores buy upstream 4.9%**, because it routes sparse and
-upstream threads neither the sparse Schur-complement Cholesky nor its assembly. Both are threaded
-here. `dE3` routes dense **under upstream and under this fork's pre-2026-08-24 chooser**, where
-upstream *does* scale (7.14×) — the fork's lead there comes from taking the sparse route instead,
-which is now its default (`SDPA_BMAT_MODE=legacy` restores the old one).
-
-Upstream also scales **negatively** on small problems — 11× slower on `control1` and 3.3× slower
-on `truss5` at 24 threads than at 1 — where this fork's work gating keeps `control1` flat to four
-decimal places. Full curves in [BENCHMARKS.md](BENCHMARKS.md).
-
-**Threaded upstream is nondeterministic** (e.g. `control1` across three repeats: 69/74/88
-iterations at 24 threads on the i9, 69/82/109 at 8 threads on the EPYC; this fork: 71/71/71
-on both), so the vs-upstream figures are observed end-to-end speedups rather than strictly
-same-trajectory comparisons. The EPYC fork binary is the one built by this README's own
-instructions from a fresh clone. Full tables, methodology and raw per-repeat data:
-[BENCHMARKS.md](BENCHMARKS.md) and [`bench/`](bench/).
-
-Results are **thread-count independent**: a checksum over every scalar of the final
-`xMat`/`yVec`/`zMat` is identical at 1/2/4/8/24 threads. Unpatched upstream is *not*
-reproducible when threaded (iteration counts and even objectives vary run to run).
-
-Results are also **platform independent between arm64 and x86-64**, which upstream is not.
-GCC and clang default to `-ffp-contract=fast` for C++, and `dd_real` arithmetic is
-header-inline, so without a pin *the compiler* decides whether the compensation terms of the
-double-double algorithms get folded into an FMA — and folding there is not an identity, because
-it deletes the very rounding error `two_sum` exists to capture. On baseline x86-64 there is no
-FMA to fold into, so those binaries behave as if contraction were off; on arm64 `fmadd` is
-baseline ISA, so they do not. The two platforms then run different arithmetic.
-
-This fork therefore builds with `-ffp-contract=off` **by default**, applied to every SDPA and
-MPLAPACK translation unit *and* to the bundled QD. With it, an M1 build matches the published
-x86-64 reference on **20 of 20** problems — iteration counts and full-precision objectives —
-where the unpinned build matches on none at the state-hash level. Hardware FMA is unaffected:
-`-ffp-contract=off` does not disable an explicit `__builtin_fma`, so QD's `two_prod` keeps its
-single `fmsub` and the aarch64 speedup is retained in full. Cost is ~1% per iteration at 1
-thread and ~1.7% at 8. x86-64 output is unchanged — all 76 translation units compile to
-byte-identical `.text` with and without the flag.
-
-Pass `--enable-fp-contract=fast` to recover the old, platform-dependent behaviour. Note that
-iteration counts published for arm64 *before* this default are counts of the unpinned solver;
-see [`bench/b4_mac_rebaseline.tsv`](bench/b4_mac_rebaseline.tsv) for the exact deltas.
-
-Evidence in this repository: [BENCHMARKS.md](BENCHMARKS.md) (generated tables, methodology),
-[`bench/pi_dd_v2.tsv`](bench/pi_dd_v2.tsv) and [`bench/mac_dd_v2.tsv`](bench/mac_dd_v2.tsv)
-(per-repeat raw data), [`bench/statehash_pi.tsv`](bench/statehash_pi.tsv) (thread-count
-independence record). The investigation history, harness and patch generators live in the
-companion repository (to be published).
-
-## Building
-
-```bash
-autoreconf -fi                       # upstream ships configure.ac only, no configure
-./configure --enable-openmp=yes
-make -j$(nproc)
-```
-
-Verified on a fresh Ubuntu 24.04 clone (gcc 13) and by CI on every push. Plain `make` is
-expected to work: upstream's `.POSIX:` Make.inc selects `c99`, which rejects the flags and used
-to stop the build with a `struct timezone` error, so the tree now applies
-`external/spooles/patches/patch-Make.inc` itself and passes the configured compiler on the
-SPOOLES make line. CI asserts that the patched flags reached the real compile lines, so a
-regression here fails the build rather than being papered over by hand. **If** `make` still
-stops inside SPOOLES, that fix has regressed — please report it; do not repair `Make.inc`
-manually, because the next `make` re-extracts SPOOLES and discards the edit.
-
-Prefer it automated? This repository packages an agent skill —
-[`.claude/skills/install-sdpa-omp/`](.claude/skills/install-sdpa-omp/) — that performs the
-whole installation (compiler detection, the SPOOLES rescue, OpenMP verification, smoke test)
-on Linux and macOS, verified on x86-64 and Apple Silicon. Claude Code discovers it
-automatically in a clone; `bash .claude/skills/install-sdpa-omp/scripts/install.sh` also
-works standalone.
-
-### macOS (Apple Silicon) — verified on an M1 Max
-
-**Do not run plain `./configure`**: `/usr/bin/gcc` is Apple clang, which has no OpenMP —
-configure reports `option to support OpenMP... unsupported` and *silently builds a serial
-binary*. Homebrew GCC is required, and SPOOLES needs it spelled out too:
-
-```bash
-brew install gcc autoconf automake libtool
-GCC=$(ls $(brew --prefix gcc)/bin/gcc-[0-9]* | head -1)   # resolve the current version
-GXX=$(ls $(brew --prefix gcc)/bin/g++-[0-9]* | head -1)   # (brew install may have just upgraded it)
-autoreconf -fi
-./configure CC="$GCC" CXX="$GXX" --enable-openmp=yes
-make -j8          # the SPOOLES compiler/flags fix is applied in-tree; no manual Make.inc edit
-otool -L sdpa_dd | grep gomp    # must print libgomp -- the proof the build is threaded
-```
-
-Run with `OMP_NUM_THREADS=<physical cores>`, pinned (`taskset`/`OMP_PLACES=cores`).
-Serial builds (`--enable-openmp=no`) are supported and CI-checked.
+That diff is the complete, always-current list of changes. An enumeration in this file went stale
+twice and is deliberately not repeated; `git log` carries the rationale per change, and each change
+carries its evidence in its commit message.
 
 ## License
 
-GPL v2, unchanged from upstream (`COPYING`). Copyright remains with the original
-SDPA authors; the patches in this fork are contributed under the same license.
-
-## Exit status
-
-Scripts that loop over problems can rely on the exit code:
-
-| outcome | exit |
-|---|---|
-| solver ran to any stopping condition (`pdOPT`, `pdFEAS`, `pFEAS`, `dFEAS`, `pdINF`, `pINF_dFEAS`, `pFEAS_dINF`, `pUNBD`, `dUNBD`, `noINFO`) | **0** |
-| iteration limit reached | **0** |
-| infeasibility / unboundedness detected | **0** |
-| malformed input, unreadable file, invalid parameter | **1** with a diagnostic (line-numbered for data files) |
-| numerical failure with nothing valid to print -- no iteration completed, or the updated `X`/`Z` left the cone **and the rollback could not be refactored** | **2**, `solveStatus = FAILURE` in the result file, no solution section |
-| recoverable late failure after `k` good iterations -- a Schur factorisation failure, or an `X`/`Z` update that left the cone and was **rolled back**; the last valid iterate is printed and labelled | **3**, `solveStatus = PARTIAL`, `failureIteration = k` in the result file |
-
-Infeasibility and the iteration limit are valid mathematical results, not errors. Upstream
-exited 0 on *every* path -- including fatal errors -- so a crashed run was indistinguishable
-from a solved one in any harness that checks exit codes.
+GPL v2, unchanged from upstream (`COPYING`). Copyright remains with the original SDPA authors; the
+patches in this fork are contributed under the same license. Every modified or added source file
+carries an in-file, dated change notice naming its own licence: GPLv2 §2a for the SDPA sources, and
+the 2-clause BSD terms for `mplapack/`, which carries no GNU licence at all.

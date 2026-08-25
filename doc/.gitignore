@@ -1,0 +1,11 @@
+# latexmk build products. technical.pdf is committed deliberately, so the document is readable
+# without a TeX installation -- and technical.pdf.stamp is committed with it, because that stamp
+# is what tests/check_doc_pdf.sh uses to prove the committed PDF was built from the committed
+# source. Neither is a build artifact to ignore; both are published.
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.toc
+*.synctex.gz
