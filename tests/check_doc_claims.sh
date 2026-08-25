@@ -36,21 +36,22 @@ for f in README.md BENCHMARKS.md INSTALL.md; do
 done
 
 # --- 2. the dE4 headline ratio ------------------------------------------------------------------
-# 7.17x/7.2x came from dividing the CURRENT 24-thread median into the HISTORICAL 1-thread median.
-# Allowed inside an erratum or a labelled historical block; never as a current claim.
-for f in README.md INSTALL.md BENCHMARKS.md; do
-  if current_claims "$f" | grep -qE '7\.17|7\.2×.*(speedup|whole-solver)'; then
-    bad "$f states 7.17x/7.2x as a current claim (supported figure: 7.13x)"
-  fi
-done
-
-# --- 3. the 1-thread baseline must not be presented as a current-release measurement -------------
-# 46.6 s is the HISTORICAL unmodified fork at one thread. It may appear, but not in a row that
-# also claims to be this release's 1-thread cell.
-if current_claims INSTALL.md | grep -E '46\.6 s' | grep -qE 'sparse route \(its default\)'; then
-  if ! grep -qE 'historical|unmodified fork, 1 thread' INSTALL.md; then
-    bad "INSTALL.md presents 46.6 s as a current-release 1-thread cell without a historical label"
-  fi
+# RETIRED and folded into rule 8. It used to read "supported figure: 7.13x" -- and 7.13x is now
+# itself the over-precise value rule 8 refuses, because nine runs of that cell span 8.2%. Two rules
+# asserting different "correct" headlines is worse than one, so rule 8 is the only one.
+#
+# --- 3. the 1-thread baseline must not pose as a current measurement ----------------------------
+# RETIRED, and it had become ACTIVELY WRONG. It fired when INSTALL's "sparse route (its default)"
+# row contained "46.6 s", on the assumption that 46.6 could only be the HISTORICAL unmodified
+# fork's 1-thread median (46.587 s). Since the re-campaign that row holds a genuine CURRENT
+# 1-thread measurement of 46.555 s -- which rounds to 46.6. The rule would now reject a true
+# statement.
+#
+# The invariant it was really protecting -- a table must not mix builds -- is served better and
+# positively by rule 3b: the scaling table has to name where it came from.
+if grep -qE '^\| dE4, sparse route \(its default\)' INSTALL.md; then
+  grep -qE 'Measured on current `main`' INSTALL.md \
+    || bad "INSTALL.md's scaling table does not say which build it was measured on"
 fi
 
 # --- 4. the convergence claim must name the tolerances actually tested ---------------------------
@@ -166,8 +167,7 @@ probe() { # label file sed-expression
 }
 
 probe "release described as pending"        README.md    's|Fixed in \[`v7.1.3-omp.3`\]|the `v7.1.3-omp.3` release is pending and [|'
-probe "dE4 headline back to 7.17x"          INSTALL.md   's/7\.28×/7.17×/'
-probe "46.6 s as a current 1-thread cell"   INSTALL.md   's/46\.612 s/46.6 s/'
+probe "scaling table stops naming build"    INSTALL.md   's/Measured on current `main`/Measured/'
 probe "non-convergence under ANY tolerance" INSTALL.md   's/either of the two tolerance settings/**any** tolerance dd can reach/'
 probe "superseded v.2 value returns"        BENCHMARKS.md 's/| 46\.62 | 47\.06 |/| 47.08 | 47.29 |/'
 probe "upstream table stops naming build"   BENCHMARKS.md 's/both builds `v7.1.3-omp.3` and/both builds and/'
