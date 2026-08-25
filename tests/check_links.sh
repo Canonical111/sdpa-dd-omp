@@ -11,7 +11,7 @@ set -u
 LC_ALL=C; export LC_ALL
 cd "$(dirname "$0")/.." || exit 2
 
-docs="README.md INSTALL.md BENCHMARKS.md bench/README.md bench/probes/README.md"
+docs="README.md INSTALL.md BENCHMARKS.md bench/README.md bench/probes/README.md bench/problems/README.md"
 missing=0
 checked=0
 

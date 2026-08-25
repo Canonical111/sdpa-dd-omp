@@ -14,9 +14,9 @@ This fork threads the regions that actually dominate, makes threaded results bit
 thread count, fixes a decimal reader that silently turned high-precision input into NaN, and
 re-derives the rule that decides how the Schur complement is factored.
 
-Fork of [nakatamaho/sdpa-dd](https://github.com/nakatamaho/sdpa-dd) at `6eaad8d9` — upstream's own
-README is preserved as [README-UPSTREAM.md](README-UPSTREAM.md). Reported upstream; not adopted
-there, which is why this fork exists.
+Fork of [nakatamaho/sdpa-dd](https://github.com/nakatamaho/sdpa-dd) at `6eaad8d9` — see that
+repository for upstream's own documentation. Reported upstream; not adopted there, which is why
+this fork exists.
 
 | | |
 |---|---|

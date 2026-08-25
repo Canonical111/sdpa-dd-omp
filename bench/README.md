@@ -56,28 +56,43 @@ OMP_PLACES=cores` and `taskset`, medians of three repeats. Each `.meta` gives th
 hashes for its own rows.
 
 Generated inputs come from the scripts in [../tests/](../tests/):
-`gen_crossblock_fixture.py`, `gen_spchol_fixture.py`, `gen_route_fixture.py`.
+`gen_crossblock_fixture.py`, `gen_spchol_fixture.py`, `gen_route_fixture.py`. The `dE3`/`dE4`
+inputs and the four-iteration parameter file are in [problems/](problems/).
 
-## What is not here, and why
+## What is here, and what is still not
 
-**The `dE3` / `dE4` inputs and the `input/sdpaquestions/` problems are not published.** They are
-research data belonging to a conformal-bootstrap campaign, not ours to redistribute. The
-consequence is stated plainly rather than hidden: **the dE3/dE4 and user-problem rows cannot be
-reproduced from this repository alone.** Their shapes are recorded — dE3 is m=6067 and dE4 m=7401,
-both 17 blocks; the seven `fill` structures are m = 2439, 4489, 5278, 6067, 8359, 10614, 11227, all
-17 blocks — and every `.meta` carries the input's sha256, so a holder of the same file can confirm
-they are running what we ran.
+**The `dE3` and `dE4` inputs are now published**, in [problems/](problems/), together with the
+exact parameter file the campaign used. Until 2026-08-25 this section said they were "not ours to
+redistribute" — but the sibling `sdpa-gmp-omp` had been publishing the same two files all along,
+so the two repositories contradicted each other and a reader had no way to tell which was right.
+They are the same files, byte for byte; `problems/SHA256SUMS` and that fork's checksum file agree.
+
+That section also claimed **"every `.meta` carries the input's sha256"**. It does not — *none* of
+the fifteen does, and no TSV carries it as a column either. The claim has been removed rather than
+softened, and `problems/SHA256SUMS` now records the hashes so that runs from here forward can be
+tied to a specific file. The parameter file *is* provable: the metadata records
+`9197d394cb3907c83ac3c021af7eef9241952030d2647af2fb045eab8d308853` and the shipped
+`problems/param_dd_4iter.sdpa` hashes to exactly that.
+
+**Still not published: the `input/sdpaquestions/` user problems and the seven `fill` structures.**
+Those are research data belonging to a conformal-bootstrap campaign and are not ours to
+redistribute. The consequence is stated rather than hidden: **those rows cannot be reproduced from
+this repository alone.** Their shapes are recorded — the seven `fill` structures are m = 2439,
+4489, 5278, 6067, 8359, 10614, 11227, all 17 blocks.
 
 Three different things get conflated by the word "reproducible", so to be exact about what this
 archive gives you:
 
 - **auditable** — you can recompute the published summaries from the published rows. True for
   everything here.
-- **identifiable** — if you hold the same input, its sha256 in the metadata confirms it is the one
-  we ran. True for the private-input campaigns.
-- **reproducible** — a fresh public clone can rerun the experiment. True only for the public-input
-  campaigns.
+- **identifiable** — if you hold the same input, a recorded sha256 confirms it is the one we ran.
+  True for the *parameter* file everywhere, and for `dE3`/`dE4` from 2026-08-25 forward; **not**
+  true retrospectively for any input, because no `.meta` recorded an input hash.
+- **reproducible** — a fresh public clone can rerun the experiment. True for the SDPLIB rows, the
+  generated fixtures, and — since the inputs were published — the `dE3`/`dE4` rows. Not true for
+  the user problems or the seven `fill` structures.
 
-Everything measured on **public** inputs — SDPLIB (`truss6`, `arch0`, `gpp100`, `control1`) and the
-generated fixtures — is fully reproducible here, and that includes the data race itself: `truss6`
-at default settings is the clearest demonstration of the defect `v7.1.3-omp.3` fixes.
+Everything measured on **public** inputs — SDPLIB (`truss6`, `arch0`, `gpp100`, `control1`), the
+generated fixtures, and now `dE3`/`dE4` — is reproducible here, and that includes the data race
+itself: `truss6` at default settings is the clearest demonstration of the defect `v7.1.3-omp.3`
+fixes.
