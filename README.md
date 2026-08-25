@@ -154,16 +154,29 @@ trajectory qualifications, is in [BENCHMARKS.md](BENCHMARKS.md).
 **On the large sparse problems the gap is much wider, because upstream's threading does not
 reach them at all.**
 
-Measured 2026-08-24 on `v7.1.3-omp.3` against upstream `6eaad8d` — the commit this fork branched
+Measured 2026-08-25 on current `main` against upstream `6eaad8d` — the commit this fork branched
 from and still its `master` — each rebuilt from its own recipe, i9-13900K, **medians of three**,
-the two builds interleaved cell by cell:
+the two builds interleaved cell by cell. Both problems take the fork's **default** route:
 
 | | upstream, 1 thread | upstream, 24 threads | **this fork, 24 threads** | fork vs upstream |
 |---|---:|---:|---:|---:|
-| `dE4` (m=7401, routes sparse) | 49.24 s | 46.95 s — **1.05×** | **6.49 s — 7.19×** | **7.24×** |
-| `dE3` (m=6067, sparse route — its default since 2026-08-24) | 434.85 s | 60.92 s — 7.14× | **4.48 s** | **13.6×** |
+| `dE4` (m=7401, routes sparse) | 49.20 s | 46.92 s — **1.05×** | **6.42 s — 7.25×** | **≈7.3×** |
+| `dE3` (m=6067, routes sparse since 2026-08-24) | 434.62 s | 60.80 s — 7.15× | **4.57 s** | **≈13×** |
 
-`dE4` is the striking column: **24 cores buy upstream 4.8%**, because it routes sparse and
+> **The clearest number here is at *one* thread.** On `dE3` the fork takes 31.33 s against
+> upstream's 434.62 s — about **13.9×**, before any threading enters. That gap is the *route*, not
+> the parallelism, and it was invisible until the route promotion, because the fork used to default
+> to the same dense route upstream takes.
+>
+> The honest counterweight: the fork's own 1→24 **scaling ratio** on `dE3` *fell*, 7.73× → 6.86×.
+> Nothing regressed — the sparse route is so much faster at one thread that there is less left for
+> threads to recover. Absolute time improved ~5× at every thread count while the scaling ratio got
+> worse; quoting either alone would mislead.
+>
+> The 24-thread advantages are given to two figures because those cells are short (4–6 s) and run
+> to 6.7–7.4% spread. The 1-thread cells are exact to 0.1%.
+
+`dE4` is the striking column: **24 cores buy upstream 4.9%**, because it routes sparse and
 upstream threads neither the sparse Schur-complement Cholesky nor its assembly. Both are threaded
 here. `dE3` routes dense **under upstream and under this fork's pre-2026-08-24 chooser**, where
 upstream *does* scale (7.14×) — the fork's lead there comes from taking the sparse route instead,

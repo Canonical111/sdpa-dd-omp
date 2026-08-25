@@ -64,11 +64,27 @@ s = rows("dd_v3_scaling_1t_24t.tsv")
 for p, m in [("dE4", "auto"), ("dE3", "auto"), ("dE3", "fill")]:
     for th in ("1", "24"):
         ck(n_of(s, problem=p, mode=m, threads=th) == 3, f"scaling {p}/{m} at {th}t: 3 repeats")
-u = rows("dd_upstream_vs_v3.tsv")
-for b in ("upstream-6eaad8d", "v7.1.3-omp.3"):
+u = rows("dd_upstream_vs_current.tsv")
+for b in ("upstream-6eaad8d", "main"):
     for p in ("dE4", "dE3"):
         for th in ("1", "2", "4", "8", "16", "24"):
             ck(n_of(u, build=b, problem=p, threads=th) == 3, f"upstream {b}/{p}/{th}t: 3 repeats")
+
+# The superseded campaign is kept in the archive; it must still parse and must still disagree with
+# the current one on dE3, which is the whole reason it was superseded.
+old_u = rows("dd_upstream_vs_v3.tsv")
+old_dE3 = med(old_u, "mainloop_s", build="v7.1.3-omp.3", problem="dE3", threads="24")
+new_dE3 = med(u, "mainloop_s", build="main", problem="dE3", threads="24")
+ck(old_dE3 / new_dE3 > 4.0, "the superseded dE3 row really is a different route",
+   f"ratio {old_dE3/new_dE3:.2f}")
+# Upstream is the same binary in both campaigns; its medians should agree closely. If they ever
+# drift, something about the host or harness changed and every comparison is suspect.
+for p in ("dE4", "dE3"):
+    for th in ("1", "24"):
+        a = med(old_u, "mainloop_s", build="upstream-6eaad8d", problem=p, threads=th)
+        b_ = med(u, "mainloop_s", build="upstream-6eaad8d", problem=p, threads=th)
+        ck(abs(a - b_) / a < 0.01, f"upstream {p}/{th}t reproduces across campaigns",
+           f"{a:.2f} vs {b_:.2f}")
 f7 = rows("dd_fill_seven_structures.tsv")
 for m in ("2439", "4489", "5278", "6067", "8359", "10614", "11227"):
     for mode in ("auto", "fill"):
@@ -120,18 +136,18 @@ for p, m, th, want in [("dE4","auto","1",46.612), ("dE4","auto","24",6.399),
     got = med(s, "mainloop_s", problem=p, mode=m, threads=th)
     ck(near(got, want, 0.01), f"INSTALL scaling: {p}/{m} at {th}t = {want} s", f"got {got}")
 
-for b, p, th, want in [("upstream-6eaad8d","dE4","1",49.24), ("upstream-6eaad8d","dE4","2",49.14),
-                       ("upstream-6eaad8d","dE4","4",47.80), ("upstream-6eaad8d","dE4","8",47.14),
-                       ("upstream-6eaad8d","dE4","16",46.90), ("upstream-6eaad8d","dE4","24",46.95),
-                       ("v7.1.3-omp.3","dE4","1",46.62), ("v7.1.3-omp.3","dE4","2",47.06),
-                       ("v7.1.3-omp.3","dE4","4",24.26), ("v7.1.3-omp.3","dE4","8",14.14),
-                       ("v7.1.3-omp.3","dE4","16",8.29), ("v7.1.3-omp.3","dE4","24",6.49),
-                       ("upstream-6eaad8d","dE3","1",434.85), ("upstream-6eaad8d","dE3","2",409.14),
-                       ("upstream-6eaad8d","dE3","4",211.32), ("upstream-6eaad8d","dE3","8",120.69),
-                       ("upstream-6eaad8d","dE3","16",71.08), ("upstream-6eaad8d","dE3","24",60.92),
-                       ("v7.1.3-omp.3","dE3","1",176.26), ("v7.1.3-omp.3","dE3","2",168.11),
-                       ("v7.1.3-omp.3","dE3","4",88.20), ("v7.1.3-omp.3","dE3","8",49.63),
-                       ("v7.1.3-omp.3","dE3","16",27.86), ("v7.1.3-omp.3","dE3","24",22.81)]:
+for b, p, th, want in [("upstream-6eaad8d","dE4","1",49.20), ("upstream-6eaad8d","dE4","2",49.11),
+                       ("upstream-6eaad8d","dE4","4",47.79), ("upstream-6eaad8d","dE4","8",47.12),
+                       ("upstream-6eaad8d","dE4","16",46.85), ("upstream-6eaad8d","dE4","24",46.92),
+                       ("main","dE4","1",46.55), ("main","dE4","2",47.01),
+                       ("main","dE4","4",24.27), ("main","dE4","8",14.09),
+                       ("main","dE4","16",8.29), ("main","dE4","24",6.42),
+                       ("upstream-6eaad8d","dE3","1",434.62), ("upstream-6eaad8d","dE3","2",408.92),
+                       ("upstream-6eaad8d","dE3","4",211.28), ("upstream-6eaad8d","dE3","8",119.96),
+                       ("upstream-6eaad8d","dE3","16",71.08), ("upstream-6eaad8d","dE3","24",60.80),
+                       ("main","dE3","1",31.33), ("main","dE3","2",31.63),
+                       ("main","dE3","4",16.40), ("main","dE3","8",9.63),
+                       ("main","dE3","16",5.69), ("main","dE3","24",4.57)]:
     got = med(u, "mainloop_s", build=b, problem=p, threads=th)
     ck(near(got, want, 0.01), f"BENCHMARKS upstream: {b}/{p} at {th}t = {want} s", f"got {got}")
 

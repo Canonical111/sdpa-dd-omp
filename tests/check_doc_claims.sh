@@ -69,7 +69,16 @@ done
 # (The earlier form of this rule guarded a "historical" label on the v.2 tables. When those tables
 # were replaced the rule silently stopped guarding anything -- the --self-test below caught that,
 # which is what it is for.)
-for pat in '47\.08' '6\.44 s' '7\.31×' '7\.29×' '13\.5×' '2\.65×' '60\.84' '434\.62'; do
+# 434.62 was REMOVED from this list. It was upstream's dE3 1-thread median in the v.2 campaign --
+# and the current campaign, run independently against the same upstream binary, reproduces it to
+# 0.05%. It is not a superseded value; it is the same measurement twice, which is evidence the
+# harness is stable rather than evidence of staleness. (Upstream's four medians agree across the
+# two campaigns to 0.05-0.20%.) Keeping it here would have made the guard reject a current fact.
+#
+# 7.31 was also removed: it was the fork's old dE4 1->24 ratio, and it is now the fork's dE4
+# 24-thread ADVANTAGE. Same digits, different quantity -- the guard cannot tell them apart, so it
+# should not try.
+for pat in '47\.08' '6\.44 s' '7\.29×' '13\.5×' '2\.65×' '60\.84'; do
   for f in README.md BENCHMARKS.md; do
     if current_claims "$f" | grep -qE "$pat"; then
       bad "$f still carries the superseded v7.1.3-omp.2 value $pat"
@@ -77,11 +86,11 @@ for pat in '47\.08' '6\.44 s' '7\.31×' '7\.29×' '13\.5×' '2\.65×' '60\.84' '
   done
 done
 if grep -qE '^\| upstream `6eaad8d`' BENCHMARKS.md; then
-  grep -qE 'both builds `v7\.1\.3-omp\.3` and' BENCHMARKS.md \
+  grep -qE 'current `main`' BENCHMARKS.md \
     || bad "BENCHMARKS.md's upstream tables do not name the fork build they measured"
 fi
 if grep -qE 'upstream, 24 threads' README.md; then
-  grep -qE "Measured 2026-08-24 on \`v7\.1\.3-omp\.3\`" README.md \
+  grep -qE 'Measured 2026-08-25 on current `main`' README.md \
     || bad "README.md's upstream table does not name the fork build and date"
 fi
 
@@ -169,8 +178,8 @@ probe() { # label file sed-expression
 probe "release described as pending"        README.md    's|Fixed in \[`v7.1.3-omp.3`\]|the `v7.1.3-omp.3` release is pending and [|'
 probe "scaling table stops naming build"    INSTALL.md   's/Measured on current `main`/Measured/'
 probe "non-convergence under ANY tolerance" INSTALL.md   's/either of the two tolerance settings/**any** tolerance dd can reach/'
-probe "superseded v.2 value returns"        BENCHMARKS.md 's/| 46\.62 | 47\.06 |/| 47.08 | 47.29 |/'
-probe "upstream table stops naming build"   BENCHMARKS.md 's/both builds `v7.1.3-omp.3` and/both builds and/'
+probe "superseded v.2 value returns"        BENCHMARKS.md 's/| 46\.55 | 47\.01 |/| 47.08 | 47.29 |/'
+probe "upstream table stops naming build"   BENCHMARKS.md 's/current `main`/that build/g'
 # Anchored on "about 5×", which is the wording the rule protects, rather than on a neighbouring
 # memory ratio that legitimately changes when the memory is re-measured. (The previous probe was
 # tied to "2.3× less" and went dead the moment that became 2.4×.)

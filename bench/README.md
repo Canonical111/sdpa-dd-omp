@@ -37,7 +37,8 @@ python3 bench/validate.py
 | `dd_final_headline_postfix.tsv` | one of three campaigns behind the dE4 headline (its own median: 6.495 s, 7.13×) |
 | `dd_v3_scaling_1t_24t.tsv` | 1→24 thread scaling, both ends from one `v7.1.3-omp.3` binary |
 | `dd_current_scaling.tsv` | the same, re-measured on current `main` after the route promotion — INSTALL's table |
-| `dd_upstream_vs_v3.tsv` | the upstream comparison in README and BENCHMARKS, 3 repeats, builds interleaved |
+| `dd_upstream_vs_current.tsv` | the upstream comparison in README and BENCHMARKS — current `main` vs upstream, both on their default routes |
+| `dd_upstream_vs_v3.tsv` | its predecessor, **superseded**: measured before the route promotion, so its dE3 fork row is a route the fork no longer defaults to |
 | `dd_fill_seven_structures.tsv` | INSTALL's `fill` table — all seven route-switch structures |
 | `dd_bitset_memory.tsv` | INSTALL's memory claim, before and after the two-bit overlap map |
 | `dd_token_length.tsv` + `truncate_significant_digits.py` | the reader defect in BENCHMARKS, isolated at 45 significant digits |

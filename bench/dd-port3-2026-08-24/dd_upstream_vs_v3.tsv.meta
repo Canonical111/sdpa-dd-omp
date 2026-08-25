@@ -1,5 +1,16 @@
 # PAIRED UPSTREAM-VS-FORK THREAD SCALING, RERUN ON v7.1.3-omp.3.
 #
+# *** SUPERSEDED 2026-08-25 by dd_upstream_vs_current.tsv. ***
+# The fork arm here measured v7.1.3-omp.3, where dE3's DEFAULT route was DENSE. The route promotion
+# changed dE3's default to SPARSE, so this table shows a route the fork no longer takes and
+# understates its own default on dE3 by about 5x (22.81 s here against 4.57 s now). dE4 is
+# unaffected -- it routes sparse under both policies -- and upstream's columns are unaffected
+# entirely, reproducing to within 0.2% in the replacement campaign.
+#
+# Kept as the record of what was measured then, and as the control that makes the replacement
+# meaningful: bench/validate.py checks that this file's dE3 row really does disagree with the
+# current one, and that upstream's medians agree across the two independent campaigns.
+#
 # WHY. The published scaling and upstream-comparison tables were measured on v7.1.3-omp.2, and two
 # of their fork cells (dE4, dE3-via-fill) ran the sparse path that carried the assembly race. The
 # benchmark/README audit required either an explicit historical label or a rerun; this is the
