@@ -8,6 +8,22 @@
 \usepackage{xcolor}
 \usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
 
+% --- source binding -----------------------------------------------------------------------------
+% doc/build.sh writes srchash.tex holding the SHA-256 of THIS file, and the hash is then stamped
+% into the PDF's Info dictionary via \pdfinfo, which pdftex writes as raw ASCII. That is what lets
+% tests/check_doc_pdf.sh verify, with nothing but grep and sha256sum, that the committed PDF was
+% produced from the committed source. srchash.tex is generated and not tracked, so the file must
+% still compile without it -- a bare `latexmk technical.tex` in a fresh clone builds an unstamped
+% PDF rather than failing.
+\IfFileExists{srchash.tex}{\input{srchash}}{\newcommand{\SourceHash}{unstamped}}
+\ifdefined\pdfinfo
+  \begingroup\edef\x{\endgroup\noexpand\pdfinfo{ /SourceSHA256 (\SourceHash) }}\x
+\fi
+\hypersetup{%
+  pdftitle={sdpa-dd-omp: threading a double-double SDP solver},
+  pdfauthor={sdpa-dd-omp},
+  pdfsubject={Technical record: threading, reproducibility and the factorisation choice}}
+
 \newtheorem{lemma}{Lemma}
 \newtheorem{corollary}{Corollary}
 \newcommand{\aggr}{\rho_{\mathrm{agg}}}
@@ -22,6 +38,9 @@ and making its threaded results reproducible}
 
 \begin{document}
 \maketitle
+\begin{center}\footnotesize
+Built from \code{doc/technical.tex}, SHA-256 \code{\SourceHash}.
+\end{center}
 
 \begin{abstract}
 \noindent
@@ -257,14 +276,38 @@ The forward substitution is a \emph{scatter}: within a row the writes go to dist
 so there is no reassociation and the threaded result is bit-identical by construction. The sibling
 \code{sdpa-gmp-omp} threads it on that basis.
 
-The backward substitution is a \emph{dot product}, and splitting a dot product across workers
-reassociates the sum. In \code{sdpa-gmp} this is recoverable: GMP carries a runtime precision, so
-the accumulator can be widened with \code{mpf\_set\_prec(acc, 2*prec)} and the partial sums
-combined without loss. \code{dd\_real} has no runtime precision to double --- the type \emph{is}
-its precision --- so the same remedy does not exist here. In \code{sdpa-gmp-omp} the backward pass
-is therefore opt-in behind \code{SDPA\_SOLVE\_BACKWARD} and off by default; in this fork it is not
-threaded. Trading bit-reproducibility for a fraction of one phase is not a trade this fork makes
-silently.
+The backward substitution is a \emph{dot product}. Row $i$'s off-diagonals all accumulate into the
+same $x_i$, so splitting the row across workers reassociates a finite-precision sum --- and no
+arrangement avoids it, because row $i-1$ genuinely reads $x_i$, so the forward pass's
+defer-the-write trick does not transfer.
+
+The question is therefore not \emph{whether} the answer changes but \emph{which} answer it changes
+to, and it is worth being exact about what the sibling fork does, because an earlier draft of this
+document got it wrong. \code{sdpa-gmp-omp} splits each row into a \textbf{fixed number of chunks}
+($64$ by default, \emph{independent of the team size}), accumulates each chunk in a scratch at
+twice the vector's precision, and folds the partials in a fixed order. That buys two properties:
+the result is identical at $1$, $8$, $32$ and $64$ threads and across reruns, and each chunk rounds
+once where the legacy loop rounded at every one of the row's $\sim$$800$ subtractions.
+
+It does \textbf{not} reproduce the legacy left fold bit for bit, and the implementation does not
+claim it does --- its own source says the parallel pass ``does change the answer'', which is why
+it ships opt-in behind \code{SDPA\_SOLVE\_BACKWARD} and defaults to serial. Nor is the accuracy
+claim a theorem: higher-precision pairwise-style accumulation being no worse than a left fold is a
+design intent to be checked empirically, for every input, rather than proved.
+
+\code{dd} is not blocked here by a missing widened accumulator. \code{qd\_real} --- four doubles,
+$\sim$$64$ digits, declared in the same headers as \code{dd\_real} --- is a direct analogue of
+GMP's doubled chunk scratch. What it would buy is the same thing GMP gets: a \emph{new
+deterministic algorithm with a new answer}, not a way to parallelise the legacy reduction
+unchanged. There is no finite-width argument by which ``enough extra digits'' proves equality with
+a computation that rounded after every subtraction; the only general way to reproduce that left
+fold exactly is to preserve its dependence order, which is precisely what removes the reduction.
+
+So the choice on \code{dd} is ``accept and validate a new deterministic algorithm, probably
+opt-in'' versus ``keep the current answer and keep the reduction serial''. This fork currently
+takes the second, and the reason is the contract stated in \S8.1: results here are bit-identical to
+the serial computation, and changing the backward pass would spend that for a fraction of one
+phase.
 
 \section{A data race in the threaded assembly, and its fix}
 \label{sec:race}
@@ -693,14 +736,14 @@ outcome & exit \\
 \endhead
 solver ran to any stopping condition (\code{pdOPT}, \code{pdFEAS}, \code{pFEAS}, \code{dFEAS},
   \code{pdINF}, \code{pINF\_dFEAS}, \code{pFEAS\_dINF}, \code{pUNBD}, \code{dUNBD},
-  \code{noINFO}) & \textbf{0} \\[2pt]
-iteration limit reached & \textbf{0} \\[2pt]
-infeasibility / unboundedness detected & \textbf{0} \\[2pt]
+  \code{noINFO}) & \textbf{0} \\
+iteration limit reached & \textbf{0} \\
+infeasibility / unboundedness detected & \textbf{0} \\
 malformed input, unreadable file, invalid parameter & \textbf{1}, with a diagnostic
-  (line-numbered for data files) \\[2pt]
+  (line-numbered for data files) \\
 numerical failure with nothing valid to print --- no iteration completed, or the updated $X$/$Z$
   left the cone \emph{and the rollback could not be refactored} & \textbf{2},
-  \code{solveStatus = FAILURE}, no solution section \\[2pt]
+  \code{solveStatus = FAILURE}, no solution section \\
 recoverable late failure after $k$ good iterations --- a Schur factorisation failure, or an
   $X$/$Z$ update that left the cone and \emph{was} rolled back; the last valid iterate is printed
   and labelled & \textbf{3}, \code{solveStatus = PARTIAL},

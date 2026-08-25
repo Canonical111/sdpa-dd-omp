@@ -24,6 +24,10 @@ automatically in a clone, if you would rather an agent do it.
 
 ## Doing it by hand
 
+**Prerequisites.** A C++ compiler with OpenMP, and the Autotools — `autoconf`, `automake`,
+`libtool`. Upstream ships no `configure`, so `autoreconf` is the *first* command below, not an
+optional refresh; neither GCC nor the Xcode command-line tools provide it.
+
 ```bash
 autoreconf -fi                      # upstream ships no configure
 ./configure --enable-openmp=yes
@@ -40,14 +44,21 @@ count](#choosing-a-thread-count).
 ### macOS (Apple Silicon)
 
 Apple clang does not ship OpenMP, so plain `./configure` produces a **silent serial binary**. A real
-GCC is required:
+GCC is required — and so are the Autotools, which macOS does not provide:
 
 ```bash
-brew install gcc
-./configure --enable-openmp=yes CXX=g++-14 CC=gcc-14   # match your brew version
+brew install gcc autoconf automake libtool
+GCC=$(ls "$(brew --prefix gcc)"/bin/gcc-[0-9]* | head -1)   # resolve the version you have --
+GXX=$(ls "$(brew --prefix gcc)"/bin/g++-[0-9]* | head -1)   # brew may have just upgraded it
+autoreconf -fi
+./configure --enable-openmp=yes CC="$GCC" CXX="$GXX"
 make -j8
-otool -L sdpa_dd | grep omp                            # proof the build is threaded
+otool -L sdpa_dd | grep omp                                # proof the build is threaded
 ```
+
+The two `ls` lines are the same version discovery the installer script does. Hard-coding
+`gcc-14`/`g++-14` works until the next `brew upgrade` renames the binary, so resolve it rather than
+spell it.
 
 ## Verifying the build
 

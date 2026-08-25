@@ -21,7 +21,7 @@ there, which is why this fork exists.
 | | |
 |---|---|
 | **Build and run it** | [INSTALL.md](INSTALL.md) — build, verify, choose a thread count, troubleshoot |
-| **Why it works this way** | [doc/technical.pdf](doc/technical.pdf) — mechanisms, the derivation behind the factorisation rule, every environment variable, the exit-status contract, and what is *not* established |
+| **Why it works this way** | [doc/technical.pdf](doc/technical.pdf) — mechanisms, the derivation behind the factorisation rule, every environment variable, the exit-status contract, and what is *not* established (source: [doc/technical.tex](doc/technical.tex)) |
 | **Full benchmark tables** | [BENCHMARKS.md](BENCHMARKS.md), raw per-repeat data in [`bench/`](bench/) |
 
 ## What was improved
@@ -34,10 +34,16 @@ matter on large problems and are entirely serial upstream — which is the whole
 
 Both the assembled Schur complement and the finished Cholesky factor are **bit-identical at any
 thread count by construction**, not by luck: for a fixed pivot each worker owns one destination
-row, every read comes from the pivot row, and no sum is ever reassociated. The backward triangular
-solve is the one region deliberately left serial — it *is* a reassociated sum, and unlike
-`sdpa-gmp` there is no runtime precision here to widen an accumulator with, so threading it would
-trade reproducibility for a fraction of one phase.
+row, every read comes from the pivot row, and no sum is ever reassociated.
+
+The backward triangular solve is the one region deliberately left serial. It *is* a reassociated
+sum, and no arrangement avoids that. `sdpa-gmp-omp` threads it behind an opt-in flag by fixing the
+chunk count independently of the team size, which yields one reproducible answer at every thread
+count — but a *different* answer from the serial reduction, which is exactly why it is opt-in
+there. dd could do the same with a `qd_real` accumulator; that would likewise be a new answer, not
+the old one computed faster. This fork keeps the pass serial rather than spend bit-identity with
+the serial computation on a fraction of one phase. [doc/technical.pdf](doc/technical.pdf) §5.5 has
+the argument.
 
 **Threading no longer makes small problems slower.** Upstream enters its parallel regions
 regardless of problem size — it has a threshold mechanism, but it is disabled behind `if (0)` and

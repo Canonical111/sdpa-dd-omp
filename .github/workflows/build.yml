@@ -1036,10 +1036,11 @@ jobs:
           # evidence repository, so no reader could follow the provenance the documents promised.
           bash tests/check_links.sh
           # doc/technical.pdf is a COMMITTED build product of doc/technical.tex -- the same
-          # two-copies-of-one-claim shape as everything above. The stamp beside it says which
-          # source it was built from, so a .tex edited without a rebuild fails here instead of
-          # shipping a PDF that disagrees with its own source. (No TeX on this runner, so only
-          # the stamp check runs; the compile check runs where latexmk exists.)
+          # two-copies-of-one-claim shape as everything above. doc/build.sh writes the source's
+          # SHA-256 into the PDF's own Info dictionary, and this greps the COMMITTED PDF for it,
+          # so a .tex edited without a rebuild fails here. It reads the artefact it makes a claim
+          # about; an earlier sidecar-file version did not, and a review caught that. (No TeX on
+          # this runner, so the compile half is skipped; it runs where latexmk exists.)
           bash tests/check_doc_pdf.sh
           # And the published rows must still yield the published figures.
           python3 bench/validate.py
