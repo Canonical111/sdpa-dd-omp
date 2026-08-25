@@ -119,10 +119,16 @@ if current_claims INSTALL.md | grep -qE '382(\.0)? MB|277(\.5)? MB'; then
   grep -qF "not the latest release" INSTALL.md \
     || bad "INSTALL.md quotes main-only memory figures without saying they are not in the release"
 fi
-if grep -qE 'v7\.1\.3-omp\.3' README.md; then
-  grep -qE 'These documents describe .main., which is ahead of the latest release' README.md \
-    || bad "README.md points at the release without noting that main is ahead of it"
-fi
+# The README half of this rule is RETIRED as of 2026-08-25. It required that any README mention of
+# v7.1.3-omp.3 be accompanied by the "main is ahead of the latest release" notice; the owner removed
+# both the release warning and that notice from README, so the rule's condition can no longer be
+# true and the rule -- and its --self-test probe -- would have been silently dead. Deleting it is
+# honest; leaving it in place would have been a rule that proves nothing.
+#
+# What it was really protecting -- that README must not quote main's figures as if they were the
+# release's -- is still enforced, positively, by rule 5: README's upstream table has to carry
+# "Measured 2026-08-25 on current `main`" or the guard fails. INSTALL.md keeps its own half of this
+# rule, above, because INSTALL still states the release divergence.
 
 # --- 8. the dE4 headline must not be quoted to three significant figures ------------------------
 # Nine runs across three campaigns span 8.2% on that cell, giving ratios of 7.13x, 7.24x and 7.25x.
@@ -179,7 +185,11 @@ probe() { # label file sed-expression
   fi
 }
 
-probe "release described as pending"        README.md    's|Fixed in \[`v7.1.3-omp.3`\]|the `v7.1.3-omp.3` release is pending and [|'
+# Anchored on the TITLE, not on a release sentence. The previous anchor was README's
+# "Fixed in [`v7.1.3-omp.3`]" line, and it died the moment that notice was removed -- which is
+# exactly the failure this self-test exists to catch, caught by the self-test. The title is the one
+# line in the file that cannot move without the file becoming a different document.
+probe "release described as pending"        README.md    's|^# sdpa-dd-omp$|# sdpa-dd-omp (release is pending)|'
 probe "scaling table stops naming build"    INSTALL.md   's/Measured on current `main`/Measured/'
 probe "non-convergence under ANY tolerance" INSTALL.md   's/either of the two tolerance settings/**any** tolerance dd can reach/'
 probe "superseded v.2 value returns"        BENCHMARKS.md 's/| 46\.55 | 47\.01 |/| 47.08 | 47.29 |/'
@@ -190,7 +200,6 @@ probe "upstream table stops naming build"   BENCHMARKS.md 's/current `main`/that
 probe "dE3-fill quoted to 3 sig figs"       INSTALL.md   's/about 5× faster/4.92× faster/'
 probe "dE4 headline to 3 sig figs"          README.md    's/about a \*\*7.2×\*\* improvement/a **7.13×** improvement/'
 probe "main-ahead notice dropped (INSTALL)" INSTALL.md   's/not the latest release/not the newest thing/'
-probe "main-ahead notice dropped (README)"  README.md    's/These documents describe `main`, which is ahead of the latest release/Current figures/'
 
 echo
 if [ "$dead" -eq 0 ]; then

@@ -87,6 +87,60 @@ guard is a minor optimisation; in double-double it is not, because ``multiply by
 a full multiprecision call. Restoring it in \code{mplapack/Rgemm\_NN\_omp.cpp} and
 \code{Rgemm\_NT\_omp.cpp} recovers up to $2\times$ on the serial path.
 
+\subsection{The bundled QD builds without hardware FMA on aarch64}
+\label{sec:qdfma}
+
+QD's own \code{configure} runs its FMA probe only under \code{case \$host in powerpc*-*-*)}. The
+default \code{--enable-fma=auto} therefore resolves silently to \emph{none} everywhere else:
+\code{QD\_FMA}/\code{QD\_FMS} stay undefined, and \code{two\_prod} --- the most-executed primitive
+in the whole solver --- compiles the Dekker two-way split instead of
+$p = a b;\ \mathrm{err} = \mathrm{fma}(a, b, -p)$.
+
+On Apple Silicon that is \textbf{72 instructions against 8} (\code{dd\_real::operator*}: 71 against
+13), the difference being \code{fmul}+\code{fnmsub} against a sequence containing two conditional
+branches for \code{split()}'s $2^{996}$ overflow guard. Enabling it moves the solver's main loop by
+\textbf{$1.59\times$ in aggregate} at one thread --- per problem $1.21$--$1.63\times$ (\code{truss6}
+$1.21$, \code{arch0} $1.38$, \code{mcp250-1} $1.53$, \code{gpp250-1} $1.61$, \code{control7} $1.62$,
+\code{theta3} $1.63$) --- against a repeat spread of $0.1$--$2.8\%$, so the smallest ratio exceeds
+the largest spread by about $4\times$ and no row is marginal.
+
+\paragraph{Bit-identical, and measured rather than assumed.} Sixteen SDPLIB problems were hashed
+over the complete solution section: reference-versus-candidate at 8 threads $0/16$, candidate 1
+thread versus 8 threads $0/16$, reference-versus-candidate at 1 thread $0/16$, and both arms under
+\code{-ffp-contract=on} $0/16$. Iteration counts were identical across all $96$ runs. The comparison
+is proven \emph{sensitive} rather than merely quiet: perturbing \code{lambdaStar} by one part in
+$10^{13}$ with the same binary moved $17$ fields across $6$ problems. A scalar cross-check over
+$\sim$$106$M random pairs found the product and the error term agreeing exactly across the solver
+band, the normal band, \code{two\_sqr}, near-overflow and huge-times-tiny; they diverge only for
+deep subnormals, where the exact error term is below \code{DBL\_MIN} and unrepresentable.
+
+\paragraph{Strictly more correct, too.} Near \code{DBL\_MAX} the Dekker split overflows and returns
+\code{inf}/\code{nan} for a finite product --- $a = 10^{-300}$, $b = \code{DBL\_MAX}$ gives
+$\mathrm{err} = \infty$ under the split and $9.84\times10^{-9}$ under FMA. That is a latent defect
+in the non-FMA builds, removed here on aarch64.
+
+\paragraph{The aarch64 gate is deliberate, not an oversight.} On aarch64 \code{fmadd} is baseline
+ISA, so \code{\_\_builtin\_fma} is a single instruction. On x86-64 \emph{without} \code{-mfma}, GCC
+lowers \code{\_\_builtin\_fma} to a libm \emph{call}, which is far slower than the split --- and
+this project builds generic x86-64 on purpose (no \code{-march}, no \code{-mfma}) so binaries stay
+bit-identical across AMD and Intel nodes. On every non-aarch64 host the argument handed to QD's
+\code{configure} is unchanged, and x86-64 was verified untouched at seven levels, including $74/74$
+objects identical after stripping, \code{.text} byte-identical, and all $60$ published state-hash
+cells regenerated and matched. \code{--enable-qd-fma=auto|gnu|no} overrides the host gate, and
+exists so that ``the same build with QD's explicit FMA turned off'' is configurable without
+hand-editing --- hand-editing does \emph{not} invalidate \code{external/qd}'s configure stamp, and
+would silently reuse the previous library.
+
+One inherited trap was fixed alongside it: \code{work/.qd\_configure\_done} depended only on the
+patch stamp, so an existing build tree kept a stamp made with the old arguments and silently
+produced a non-FMA library. Anyone benchmarking in an existing tree would have measured the
+reference while believing they measured the candidate.
+
+\paragraph{Known gap, deliberately not closed here.} \code{install.sh} short-circuits to a system QD
+on Linux when \code{/usr/include/qd/qd\_real.h} exists, so an aarch64 Linux box with a distribution
+\code{libqd-dev} never reaches this flag. Fixing that would also change which QD x86-64 Linux picks
+up, and so needs its own decision.
+
 \subsection{OpenMP regions entered regardless of problem size}
 
 Upstream enters its parallel regions without asking whether there is enough work to repay the
@@ -160,7 +214,8 @@ level.
 
 Hardware FMA is not lost. \code{-ffp-contract=off} does not disable an explicit
 \code{\_\_builtin\_fma}, so QD's \code{two\_prod} keeps its single \code{fmsub} and the
-\code{aarch64} speedup is retained in full. The cost is $\sim$$1\%$ per iteration at one thread
+\code{aarch64} speedup of \S\ref{sec:qdfma} is retained in full --- verified at the instruction
+level, not assumed. The cost is $\sim$$1\%$ per iteration at one thread
 and $\sim$$1.7\%$ at eight. On \code{x86-64} the output is unchanged and so is the object code:
 all $76$ translation units compile to byte-identical \code{.text} with and without the flag.
 

@@ -24,29 +24,6 @@ there, which is why this fork exists.
 | **Why it works this way** | [doc/technical.pdf](doc/technical.pdf) — mechanisms, the derivation behind the factorisation rule, every environment variable, the exit-status contract, and what is *not* established |
 | **Full benchmark tables** | [BENCHMARKS.md](BENCHMARKS.md), raw per-repeat data in [`bench/`](bench/) |
 
-> **Do not use `v7.1.3-omp.2`.** It contains a data race in the threaded assembly: on a problem
-> whose sparse assembly is threaded *and* whose SDP blocks share Schur-complement entries — SDPLIB
-> `truss6` among them, at default settings — it returns a different answer on nearly every run.
-> **Fixed in [`v7.1.3-omp.3`](https://github.com/Canonical111/sdpa-dd-omp/releases/tag/v7.1.3-omp.3)**
-> (commit `e660d19`; archive sha256 `290a038e…`). The check that catches it is in
-> [INSTALL.md](INSTALL.md#the-property-worth-checking-yourself) and in CI. The full account —
-> including why every existing test passed on a racing binary — is
-> [doc/technical.pdf](doc/technical.pdf) §6.
-
-> ### These documents describe `main`, which is ahead of the latest release
->
-> `v7.1.3-omp.3` is the newest tag and is **correct** — it has the race fix. `main` carries two
-> further changes. One is invisible except in memory (the overlap map uses two bits per Schur entry
-> instead of one `int`: `dE4` 382.0 MB against 405.8 MB, `dE3` 277.5 MB against 294.2 MB). The
-> other **changes results on affected problems**: the fill-derived route policy is now the default,
-> so `dE3` routes sparse instead of dense — 4.5 s / 277 MB at 24 threads against 22.6 s / 671 MB —
-> and its trajectory differs in the last digits. No SDPLIB problem changes route. `dE4` is
-> unaffected.
->
-> `SDPA_BMAT_MODE=legacy` on `main` reproduces the release's routing exactly. Wherever these
-> documents quote a route, a memory figure or a `dE3` timing, it is `main`'s. A `v7.1.3-omp.4` tag
-> is deliberately deferred pending review.
-
 ## What was improved
 
 **Threading the regions that dominate.** The `bMat` constraint loop, the **sparse Schur-complement
@@ -68,6 +45,24 @@ cannot simply be switched on, because the `_ref` bodies it dispatches to are abs
 link. On a user's `max_custom_scaled.dat-s` (m=16) upstream degrades at *every* thread count,
 ending **24.5× slower on 24 cores than on 1**; this fork is flat to four decimal places, because
 the work/width gate declines to thread what cannot repay itself.
+
+**Hardware FMA for the bundled QD on Apple Silicon — about 1.6×.** QD's own `configure` runs its
+FMA probe only under `case $host in powerpc*-*-*)`, so the default `--enable-fma=auto` silently
+resolves to *none* on aarch64: `QD_FMA`/`QD_FMS` stay undefined and `two_prod` — the most-executed
+primitive in the whole solver — compiles the Dekker two-way split instead of `p=a*b; err=fma(a,b,-p)`.
+On Apple Silicon that is **72 instructions against 8** (`dd_real::operator*`: 71 against 13), the
+difference including two conditional branches for the split's overflow guard. Enabling it moves the
+solver's main loop by **1.59× in aggregate** at one thread, 1.21–1.63× per problem, against a
+repeat spread of 0.1–2.8%.
+
+It is also **bit-identical and strictly more correct**, both measured rather than assumed: 16
+SDPLIB problems across 96 runs give 0/16 hash mismatches in all four comparisons with identical
+iteration counts, and near `DBL_MAX` the Dekker split overflows and returns `inf`/`nan` for a
+finite product where FMA does not. The gate is deliberately **aarch64-only** — on x86-64 without
+`-mfma`, GCC lowers `__builtin_fma` to a libm *call*, which is slower than the split, and this
+project builds generic x86-64 on purpose so binaries stay bit-identical across AMD and Intel nodes.
+x86-64 is provably untouched: 74/74 objects identical after stripping, `.text` byte-identical, and
+all 60 published state-hash cells regenerated and matched.
 
 **High-precision input is read correctly.** QD's decimal converter overflows internally at 309 or
 more mantissa digits and *returns success while producing NaN*, so a 600-digit spelling of an
@@ -104,7 +99,7 @@ with nothing behind it. **One tunable replaces two.** No SDPLIB problem changes 
 memory. Not "sparse always wins": `truss5` has an ordered fill of 1.0 and dense is genuinely faster
 there — both rules send it dense, which is the point of testing fill rather than assuming.
 
-**Two inherited kernel defects, fixed.** `mplapack` 2.0.1 dropped netlib `dgemm`'s zero-skip guard,
+**Two smaller inherited defects, fixed.** `mplapack` 2.0.1 dropped netlib `dgemm`'s zero-skip guard,
 so multiplying by zero still paid full multiprecision cost — restored in `Rgemm_NN_omp.cpp` and
 `Rgemm_NT_omp.cpp`, worth up to 2× serial. And the reduced per-formula timers reported
 worker-seconds where elapsed time was expected, so a region looked *more* expensive the more it was
@@ -119,14 +114,36 @@ the failing iteration. The full contract is in [doc/technical.pdf](doc/technical
 
 Three views, and they measure different things:
 
+- **20 SDPLIB problems on three machines** — the broad-coverage set, and the one to start from,
+  though every problem in it takes a dense `bMat` and so misses the path below entirely;
 - **the large sparse problems** — where the difference actually lives, because they are the only
   ones that reach the threaded sparse Cholesky and assembly;
-- **20 SDPLIB problems on three machines** — the broad-coverage set, but every one of them takes a
-  dense `bMat` and so misses the path above entirely;
 - **small problems** — where upstream's threading is actively harmful and this fork's gating is the
   whole story.
 
 [BENCHMARKS.md](BENCHMARKS.md) is the full dossier and says which table to use for what.
+
+### 20 SDPLIB problems (m = 21…1106), three machines
+
+External wall clock, median of 3 pinned repeats. The headline is quoted **per iteration** — because
+the FP-contraction pin changed iteration counts on 12 of the 20 problems, and a wall-clock ratio
+across differing iteration counts mixes speed with path length.
+
+| | EPYC 7232P (8 cores) | i9-13900K (24 cores) | M1 Max (8P+2E) |
+|---|---:|---:|---:|
+| sdpa-dd 7.1.2 (2009), single-threaded | 1107.3 s | 309.6 s | 360.0 s |
+| upstream master, threaded, at its best | 537.8 s | 136.7 s | 112.4 s |
+| **this fork**, at its best | **292.0 s** @8 thr | **58.8 s** @24 thr | **44.9 s** @8 thr |
+| **vs sdpa-dd 7.1.2, per iteration** | **3.82×** | **5.13×** | **7.78×** |
+
+The per-iteration row is the one to quote; the wall-clock rows above it are given because they are
+what a user actually waits for, but a ratio between them mixes speed with path length. Per-machine
+detail, per-problem rows and the iteration counts are in [BENCHMARKS.md](BENCHMARKS.md).
+
+**Threaded upstream is nondeterministic** — `control1` across three repeats: 69/74/88 iterations at
+24 threads on the i9, 69/82/109 at 8 threads on the EPYC, where this fork runs 71/71/71 on both —
+so the vs-upstream figures are observed end-to-end speedups rather than strictly same-trajectory
+comparisons.
 
 ### The large sparse problems, against upstream
 
@@ -173,28 +190,6 @@ These are **fixed-budget comparisons, not time-to-convergence results** — neit
 at double-double precision under either tolerance tested (the shipped `epsilonStar=1e-30` and a
 relaxed `1e-20`). Raw rows and full provenance:
 [bench/dd-port3-2026-08-24/](bench/dd-port3-2026-08-24/).
-
-### 20 SDPLIB problems (m = 21…1106), three machines
-
-External wall clock, median of 3 pinned repeats. The headline is quoted **per iteration** — because
-the FP-contraction pin changed iteration counts on 12 of the 20 problems, and a wall-clock ratio
-across differing iteration counts mixes speed with path length.
-
-| | EPYC 7232P (8 cores) | i9-13900K (24 cores) | M1 Max (8P+2E) |
-|---|---:|---:|---:|
-| sdpa-dd 7.1.2 (2009), single-threaded | 1107.3 s | 309.6 s | 360.0 s |
-| upstream master, threaded, at its best | 537.8 s | 136.7 s | 112.4 s |
-| **this fork**, at its best | **292.0 s** @8 thr | **58.8 s** @24 thr | **44.9 s** @8 thr |
-| **vs sdpa-dd 7.1.2, per iteration** | **3.82×** | **5.13×** | **7.78×** |
-
-The per-iteration row is the one to quote; the wall-clock rows above it are given because they are
-what a user actually waits for, but a ratio between them mixes speed with path length. Per-machine
-detail, per-problem rows and the iteration counts are in [BENCHMARKS.md](BENCHMARKS.md).
-
-**Threaded upstream is nondeterministic** — `control1` across three repeats: 69/74/88 iterations at
-24 threads on the i9, 69/82/109 at 8 threads on the EPYC, where this fork runs 71/71/71 on both —
-so the vs-upstream figures are observed end-to-end speedups rather than strictly same-trajectory
-comparisons.
 
 ### Small problems
 
